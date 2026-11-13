@@ -1,0 +1,548 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global safety net: deny everything by default
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // -------------------------------------------------------------------------
+    // Global Helpers
+    // -------------------------------------------------------------------------
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isAdmin() {
+      return isSignedIn() && (
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
+        ('email' in request.auth.token &&
+         request.auth.token.email == 'nikhilkumarsingh2000@gmail.com' &&
+         'email_verified' in request.auth.token &&
+         request.auth.token.email_verified == true)
+      );
+    }
+
+    function isValidTimestamp(ts) {
+      return ts is timestamp && ts <= request.time;
+    }
+
+    function isBlockedPair(uidA, uidB) {
+      return exists(/databases/$(database)/documents/blocked_users/$(uidA + '_' + uidB)) ||
+             exists(/databases/$(database)/documents/blocked_users/$(uidB + '_' + uidA));
+    }
+
+    // -------------------------------------------------------------------------
+    // Entity Validators
+    // -------------------------------------------------------------------------
+    function isValidUserAccount(data) {
+      return data.uid is string && data.uid.size() >= 1 && data.uid.size() <= 128 &&
+             data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 80 &&
+             (!('email' in data) || (data.email is string && data.email.size() <= 160)) &&
+             (!('phoneNote' in data) || (data.phoneNote is string && data.phoneNote.size() <= 20)) &&
+             data.dateOfBirthMillis is int &&
+             data.isAdultVerified is bool && data.isAdultVerified == true &&
+             data.accountStatus in ['ACTIVE', 'SUSPENDED'] &&
+             data.role in ['USER', 'ADMIN'] &&
+             data.pushNotificationsEnabled is bool &&
+             data.callAlertsEnabled is bool &&
+             data.meetupRemindersEnabled is bool &&
+             data.onboardingCompleted is bool &&
+             isValidTimestamp(data.createdAt) &&
+             isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidUserProfile(data) {
+      return data.uid is string && data.uid.size() >= 1 && data.uid.size() <= 128 &&
+             data.firstName is string && data.firstName.size() >= 1 && data.firstName.size() <= 50 &&
+             data.age is int && data.age >= 18 && data.age <= 110 &&
+             (!('gender' in data) || (data.gender is string && data.gender.size() <= 30)) &&
+             data.bio is string && data.bio.size() <= 300 &&
+             data.cityArea is string && data.cityArea.size() >= 1 && data.cityArea.size() <= 80 &&
+             (!('photoData' in data) || (data.photoData is string && data.photoData.size() <= 350000)) &&
+             data.interests is list && data.interests.size() <= 10 &&
+             (data.interests.size() == 0 || data.interests[0] is string) &&
+             data.isVerified is bool &&
+             data.isAvailable is bool &&
+             data.preferredActivity is string && data.preferredActivity.size() <= 40 &&
+             data.availabilityDurationMinutes is int && data.availabilityDurationMinutes >= 0 && data.availabilityDurationMinutes <= 240 &&
+             data.availabilityExpiresAtMillis is int && data.availabilityExpiresAtMillis >= 0 &&
+             data.approxLat is number && data.approxLat >= -90.0 && data.approxLat <= 90.0 &&
+             data.approxLng is number && data.approxLng >= -180.0 && data.approxLng <= 180.0 &&
+             data.locationUpdatedAtMillis is int && data.locationUpdatedAtMillis >= 0 &&
+             data.discoveryOptIn is bool &&
+             data.accountStatus in ['ACTIVE', 'SUSPENDED'] &&
+             isValidTimestamp(data.createdAt) &&
+             isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidAvailabilitySession(data) {
+      return data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 &&
+             data.activity is string && data.activity.size() >= 1 && data.activity.size() <= 40 &&
+             data.durationMinutes is int && data.durationMinutes >= 15 && data.durationMinutes <= 240 &&
+             data.status in ['ACTIVE', 'ENDED', 'EXPIRED'] &&
+             data.startedAtMillis is int && data.startedAtMillis >= 0 &&
+             data.expiresAtMillis is int && data.expiresAtMillis >= data.startedAtMillis &&
+             isValidTimestamp(data.createdAt) &&
+             isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidConnectionRequest(data) {
+      return data.fromUid is string && data.fromUid.size() >= 1 && data.fromUid.size() <= 128 &&
+             data.toUid is string && data.toUid.size() >= 1 && data.toUid.size() <= 128 &&
+             data.fromUid != data.toUid &&
+             data.fromName is string && data.fromName.size() >= 1 && data.fromName.size() <= 60 &&
+             data.toName is string && data.toName.size() >= 1 && data.toName.size() <= 60 &&
+             (!('fromCityArea' in data) || (data.fromCityArea is string && data.fromCityArea.size() <= 80)) &&
+             data.activity is string && data.activity.size() >= 1 && data.activity.size() <= 40 &&
+             data.message is string && data.message.size() <= 240 &&
+             data.status in ['PENDING', 'ACCEPTED', 'REJECTED', 'CANCELLED'] &&
+             data.participantUids is list && data.participantUids.size() == 2 &&
+             data.fromUid in data.participantUids &&
+             data.toUid in data.participantUids &&
+             isValidTimestamp(data.createdAt) &&
+             isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidConnection(data) {
+      return data.participantUids is list && data.participantUids.size() == 2 &&
+             data.userAUid is string && data.userAUid.size() >= 1 && data.userAUid.size() <= 128 &&
+             data.userBUid is string && data.userBUid.size() >= 1 && data.userBUid.size() <= 128 &&
+             data.userAUid != data.userBUid &&
+             data.userAUid in data.participantUids &&
+             data.userBUid in data.participantUids &&
+             data.userAName is string && data.userAName.size() >= 1 && data.userAName.size() <= 60 &&
+             data.userBName is string && data.userBName.size() >= 1 && data.userBName.size() <= 60 &&
+             (!('userACity' in data) || (data.userACity is string && data.userACity.size() <= 80)) &&
+             (!('userBCity' in data) || (data.userBCity is string && data.userBCity.size() <= 80)) &&
+             data.activity is string && data.activity.size() >= 1 && data.activity.size() <= 40 &&
+             data.requestId is string && data.requestId.size() >= 1 && data.requestId.size() <= 128 &&
+             data.status in ['ACTIVE', 'ENDED'] &&
+             (!('endedByUid' in data) || (data.endedByUid is string && data.endedByUid.size() <= 128)) &&
+             isValidTimestamp(data.createdAt) &&
+             isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidMeetup(data) {
+      return data.connectionId is string && data.connectionId.size() >= 1 && data.connectionId.size() <= 128 &&
+             data.participantUids is list && data.participantUids.size() == 2 &&
+             data.proposerUid is string && data.proposerUid.size() >= 1 && data.proposerUid.size() <= 128 &&
+             data.proposerName is string && data.proposerName.size() >= 1 && data.proposerName.size() <= 60 &&
+             data.otherUid is string && data.otherUid.size() >= 1 && data.otherUid.size() <= 128 &&
+             data.otherName is string && data.otherName.size() >= 1 && data.otherName.size() <= 60 &&
+             data.proposerUid in data.participantUids &&
+             data.otherUid in data.participantUids &&
+             data.proposerUid != data.otherUid &&
+             data.activity is string && data.activity.size() >= 1 && data.activity.size() <= 40 &&
+             data.scheduledDateText is string && data.scheduledDateText.size() >= 1 && data.scheduledDateText.size() <= 40 &&
+             data.scheduledTimeText is string && data.scheduledTimeText.size() >= 1 && data.scheduledTimeText.size() <= 40 &&
+             data.publicLocationName is string && data.publicLocationName.size() >= 2 && data.publicLocationName.size() <= 120 &&
+             data.publicArea is string && data.publicArea.size() >= 2 && data.publicArea.size() <= 100 &&
+             data.notes is string && data.notes.size() <= 300 &&
+             data.status in ['PROPOSED', 'CONFIRMED', 'CANCELLED', 'COMPLETED'] &&
+             (!('confirmedByUid' in data) || (data.confirmedByUid is string && data.confirmedByUid.size() <= 128)) &&
+             (!('cancelledByUid' in data) || (data.cancelledByUid is string && data.cancelledByUid.size() <= 128)) &&
+             isValidTimestamp(data.createdAt) &&
+             isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidCall(data) {
+      return data.connectionId is string && data.connectionId.size() >= 1 && data.connectionId.size() <= 128 &&
+             data.callerUid is string && data.callerUid.size() >= 1 && data.callerUid.size() <= 128 &&
+             data.calleeUid is string && data.calleeUid.size() >= 1 && data.calleeUid.size() <= 128 &&
+             data.callerUid != data.calleeUid &&
+             data.callerName is string && data.callerName.size() >= 1 && data.callerName.size() <= 60 &&
+             data.calleeName is string && data.calleeName.size() >= 1 && data.calleeName.size() <= 60 &&
+             data.participantUids is list && data.participantUids.size() == 2 &&
+             data.callerUid in data.participantUids &&
+             data.calleeUid in data.participantUids &&
+             data.status in ['RINGING', 'ACTIVE', 'DECLINED', 'MISSED', 'ENDED', 'FAILED'] &&
+             (!('offerSdp' in data) || (data.offerSdp is string && data.offerSdp.size() <= 25000)) &&
+             (!('answerSdp' in data) || (data.answerSdp is string && data.answerSdp.size() <= 25000)) &&
+             data.durationSeconds is int && data.durationSeconds >= 0 && data.durationSeconds <= 86400 &&
+             data.startedAtMillis is int && data.startedAtMillis >= 0 &&
+             data.endedAtMillis is int && data.endedAtMillis >= 0 &&
+             isValidTimestamp(data.createdAt) &&
+             isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidIceCandidate(data) {
+      return data.senderUid is string && data.senderUid.size() >= 1 && data.senderUid.size() <= 128 &&
+             data.participantUids is list && data.participantUids.size() == 2 &&
+             data.senderUid in data.participantUids &&
+             data.sdpMid is string && data.sdpMid.size() <= 64 &&
+             data.sdpMLineIndex is int && data.sdpMLineIndex >= 0 && data.sdpMLineIndex <= 16 &&
+             data.candidate is string && data.candidate.size() >= 1 && data.candidate.size() <= 1024 &&
+             isValidTimestamp(data.createdAt);
+    }
+
+    function isValidBlockRecord(data) {
+      return data.blockerUid is string && data.blockerUid.size() >= 1 && data.blockerUid.size() <= 128 &&
+             data.blockedUid is string && data.blockedUid.size() >= 1 && data.blockedUid.size() <= 128 &&
+             data.blockerUid != data.blockedUid &&
+             data.blockedName is string && data.blockedName.size() >= 1 && data.blockedName.size() <= 60 &&
+             (!('reason' in data) || (data.reason is string && data.reason.size() <= 200)) &&
+             isValidTimestamp(data.createdAt);
+    }
+
+    function isValidReport(data) {
+      return data.reporterUid is string && data.reporterUid.size() >= 1 && data.reporterUid.size() <= 128 &&
+             data.reportedUid is string && data.reportedUid.size() >= 1 && data.reportedUid.size() <= 128 &&
+             data.reporterUid != data.reportedUid &&
+             data.reportedName is string && data.reportedName.size() >= 1 && data.reportedName.size() <= 60 &&
+             data.category is string && data.category.size() >= 2 && data.category.size() <= 50 &&
+             data.details is string && data.details.size() <= 500 &&
+             data.status in ['OPEN', 'REVIEWED', 'ACTIONED', 'DISMISSED'] &&
+             (!('adminNotes' in data) || (data.adminNotes is string && data.adminNotes.size() <= 300)) &&
+             isValidTimestamp(data.createdAt) &&
+             isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidNotification(data) {
+      return data.recipientUid is string && data.recipientUid.size() >= 1 && data.recipientUid.size() <= 128 &&
+             data.actorUid is string && data.actorUid.size() >= 1 && data.actorUid.size() <= 128 &&
+             data.actorName is string && data.actorName.size() >= 1 && data.actorName.size() <= 60 &&
+             data.type is string && data.type.size() >= 2 && data.type.size() <= 40 &&
+             data.title is string && data.title.size() >= 1 && data.title.size() <= 100 &&
+             data.body is string && data.body.size() >= 1 && data.body.size() <= 220 &&
+             data.referenceId is string && data.referenceId.size() <= 128 &&
+             data.isRead is bool &&
+             isValidTimestamp(data.createdAt);
+    }
+
+    // -------------------------------------------------------------------------
+    // Collection Rules
+    // -------------------------------------------------------------------------
+    match /admins/{adminUid} {
+      allow get: if isSignedIn() && isValidId(adminUid) && (request.auth.uid == adminUid || isAdmin());
+      allow list, create, update, delete: if false;
+    }
+
+    match /users/{userId} {
+      allow get: if isSignedIn() && isValidId(userId) && (request.auth.uid == userId || isAdmin());
+      allow list: if isAdmin();
+
+      allow create: if isSignedIn() &&
+                       isValidId(userId) &&
+                       request.auth.uid == userId &&
+                       incoming().uid == request.auth.uid &&
+                       incoming().role == 'USER' &&
+                       incoming().accountStatus == 'ACTIVE' &&
+                       incoming().keys().hasAll(['uid', 'displayName', 'dateOfBirthMillis', 'isAdultVerified', 'accountStatus', 'role', 'pushNotificationsEnabled', 'callAlertsEnabled', 'meetupRemindersEnabled', 'onboardingCompleted', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['uid', 'displayName', 'email', 'phoneNote', 'dateOfBirthMillis', 'isAdultVerified', 'accountStatus', 'role', 'pushNotificationsEnabled', 'callAlertsEnabled', 'meetupRemindersEnabled', 'onboardingCompleted', 'createdAt', 'updatedAt']) &&
+                       isValidUserAccount(incoming());
+
+      allow update: if isSignedIn() &&
+                       isValidId(userId) &&
+                       isValidUserAccount(incoming()) && (
+                         (isAdmin() &&
+                          incoming().uid == existing().uid &&
+                          incoming().createdAt == existing().createdAt &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['accountStatus', 'role', 'updatedAt'])) ||
+                         (request.auth.uid == userId &&
+                          incoming().uid == existing().uid &&
+                          incoming().role == existing().role &&
+                          incoming().accountStatus == existing().accountStatus &&
+                          incoming().createdAt == existing().createdAt &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'email', 'phoneNote', 'dateOfBirthMillis', 'isAdultVerified', 'pushNotificationsEnabled', 'callAlertsEnabled', 'meetupRemindersEnabled', 'onboardingCompleted', 'updatedAt']))
+                       );
+
+      allow delete: if isSignedIn() && isValidId(userId) && (request.auth.uid == userId || isAdmin());
+    }
+
+    match /user_profiles/{profileId} {
+      allow get: if isSignedIn() && isValidId(profileId) && (
+        request.auth.uid == profileId ||
+        isAdmin() ||
+        existing().accountStatus == 'ACTIVE'
+      );
+
+      allow list: if isSignedIn() && (
+        isAdmin() ||
+        (existing().isAvailable == true &&
+         existing().discoveryOptIn == true &&
+         existing().accountStatus == 'ACTIVE')
+      );
+
+      allow create: if isSignedIn() &&
+                       isValidId(profileId) &&
+                       request.auth.uid == profileId &&
+                       incoming().uid == request.auth.uid &&
+                       incoming().isVerified == false &&
+                       incoming().accountStatus == 'ACTIVE' &&
+                       incoming().keys().hasAll(['uid', 'firstName', 'age', 'bio', 'cityArea', 'interests', 'isVerified', 'isAvailable', 'preferredActivity', 'availabilityDurationMinutes', 'availabilityExpiresAtMillis', 'approxLat', 'approxLng', 'locationUpdatedAtMillis', 'discoveryOptIn', 'accountStatus', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['uid', 'firstName', 'age', 'gender', 'bio', 'cityArea', 'photoData', 'interests', 'isVerified', 'isAvailable', 'preferredActivity', 'availabilityDurationMinutes', 'availabilityExpiresAtMillis', 'approxLat', 'approxLng', 'locationUpdatedAtMillis', 'discoveryOptIn', 'accountStatus', 'createdAt', 'updatedAt']) &&
+                       isValidUserProfile(incoming());
+
+      allow update: if isSignedIn() &&
+                       isValidId(profileId) &&
+                       isValidUserProfile(incoming()) && (
+                         (isAdmin() &&
+                          incoming().uid == existing().uid &&
+                          incoming().createdAt == existing().createdAt &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['isVerified', 'accountStatus', 'updatedAt'])) ||
+                         (request.auth.uid == profileId &&
+                          incoming().uid == existing().uid &&
+                          incoming().isVerified == existing().isVerified &&
+                          incoming().accountStatus == existing().accountStatus &&
+                          incoming().createdAt == existing().createdAt &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['firstName', 'age', 'gender', 'bio', 'cityArea', 'photoData', 'interests', 'isAvailable', 'preferredActivity', 'availabilityDurationMinutes', 'availabilityExpiresAtMillis', 'approxLat', 'approxLng', 'locationUpdatedAtMillis', 'discoveryOptIn', 'updatedAt']))
+                       );
+
+      allow delete: if isSignedIn() && isValidId(profileId) && (request.auth.uid == profileId || isAdmin());
+    }
+
+    match /availability_sessions/{sessionId} {
+      allow get: if isSignedIn() && isValidId(sessionId) && (existing().userId == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (existing().userId == request.auth.uid || isAdmin());
+
+      allow create: if isSignedIn() &&
+                       isValidId(sessionId) &&
+                       incoming().userId == request.auth.uid &&
+                       incoming().status == 'ACTIVE' &&
+                       incoming().keys().hasAll(['userId', 'activity', 'durationMinutes', 'status', 'startedAtMillis', 'expiresAtMillis', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['userId', 'activity', 'durationMinutes', 'status', 'startedAtMillis', 'expiresAtMillis', 'createdAt', 'updatedAt']) &&
+                       isValidAvailabilitySession(incoming());
+
+      allow update: if isSignedIn() &&
+                       isValidId(sessionId) &&
+                       isValidAvailabilitySession(incoming()) &&
+                       existing().userId == request.auth.uid &&
+                       existing().status == 'ACTIVE' &&
+                       incoming().userId == existing().userId &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt']);
+
+      allow delete: if isSignedIn() && isValidId(sessionId) && (existing().userId == request.auth.uid || isAdmin());
+    }
+
+    match /connection_requests/{requestId} {
+      allow get: if isSignedIn() && isValidId(requestId) && (request.auth.uid in existing().participantUids || isAdmin());
+      allow list: if isSignedIn() && (request.auth.uid in existing().participantUids || isAdmin());
+
+      allow create: if isSignedIn() &&
+                       isValidId(requestId) &&
+                       incoming().fromUid == request.auth.uid &&
+                       incoming().status == 'PENDING' &&
+                       incoming().keys().hasAll(['fromUid', 'toUid', 'fromName', 'toName', 'activity', 'message', 'status', 'participantUids', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['fromUid', 'toUid', 'fromName', 'toName', 'fromCityArea', 'activity', 'message', 'status', 'participantUids', 'createdAt', 'updatedAt']) &&
+                       isValidConnectionRequest(incoming()) &&
+                       !isBlockedPair(incoming().fromUid, incoming().toUid);
+
+      allow update: if isSignedIn() &&
+                       isValidId(requestId) &&
+                       isValidConnectionRequest(incoming()) && (
+                         isAdmin() ||
+                         (existing().status == 'PENDING' &&
+                          incoming().fromUid == existing().fromUid &&
+                          incoming().toUid == existing().toUid &&
+                          incoming().participantUids == existing().participantUids &&
+                          incoming().createdAt == existing().createdAt &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt']) &&
+                          (
+                            (request.auth.uid == existing().toUid && incoming().status in ['ACCEPTED', 'REJECTED']) ||
+                            (request.auth.uid == existing().fromUid && incoming().status == 'CANCELLED')
+                          ))
+                       );
+
+      allow delete: if isSignedIn() && isValidId(requestId) && (request.auth.uid == existing().fromUid || isAdmin());
+    }
+
+    match /connections/{connectionId} {
+      allow get: if isSignedIn() && isValidId(connectionId) && (request.auth.uid in existing().participantUids || isAdmin());
+      allow list: if isSignedIn() && (request.auth.uid in existing().participantUids || isAdmin());
+
+      allow create: if isSignedIn() &&
+                       isValidId(connectionId) &&
+                       request.auth.uid in incoming().participantUids &&
+                       incoming().status == 'ACTIVE' &&
+                       incoming().keys().hasAll(['participantUids', 'userAUid', 'userBUid', 'userAName', 'userBName', 'activity', 'requestId', 'status', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['participantUids', 'userAUid', 'userBUid', 'userAName', 'userBName', 'userACity', 'userBCity', 'activity', 'requestId', 'status', 'endedByUid', 'createdAt', 'updatedAt']) &&
+                       isValidConnection(incoming()) &&
+                       !isBlockedPair(incoming().userAUid, incoming().userBUid);
+
+      allow update: if isSignedIn() &&
+                       isValidId(connectionId) &&
+                       isValidConnection(incoming()) && (
+                         isAdmin() ||
+                         (request.auth.uid in existing().participantUids &&
+                          incoming().participantUids == existing().participantUids &&
+                          incoming().userAUid == existing().userAUid &&
+                          incoming().userBUid == existing().userBUid &&
+                          incoming().createdAt == existing().createdAt &&
+                          (
+                            (existing().status == 'ACTIVE' && incoming().status == 'ENDED' && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'endedByUid', 'updatedAt'])) ||
+                            (existing().status == 'ENDED' && incoming().status == 'ACTIVE' && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'activity', 'requestId', 'updatedAt']))
+                          ))
+                       );
+
+      allow delete: if isAdmin();
+    }
+
+    match /meetups/{meetupId} {
+      allow get: if isSignedIn() && isValidId(meetupId) && (request.auth.uid in existing().participantUids || isAdmin());
+      allow list: if isSignedIn() && (request.auth.uid in existing().participantUids || isAdmin());
+
+      allow create: if isSignedIn() &&
+                       isValidId(meetupId) &&
+                       incoming().proposerUid == request.auth.uid &&
+                       incoming().status == 'PROPOSED' &&
+                       incoming().keys().hasAll(['connectionId', 'participantUids', 'proposerUid', 'proposerName', 'otherUid', 'otherName', 'activity', 'scheduledDateText', 'scheduledTimeText', 'publicLocationName', 'publicArea', 'notes', 'status', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['connectionId', 'participantUids', 'proposerUid', 'proposerName', 'otherUid', 'otherName', 'activity', 'scheduledDateText', 'scheduledTimeText', 'publicLocationName', 'publicArea', 'notes', 'status', 'confirmedByUid', 'cancelledByUid', 'createdAt', 'updatedAt']) &&
+                       isValidMeetup(incoming()) &&
+                       exists(/databases/$(database)/documents/connections/$(incoming().connectionId)) &&
+                       get(/databases/$(database)/documents/connections/$(incoming().connectionId)).data.status == 'ACTIVE' &&
+                       request.auth.uid in get(/databases/$(database)/documents/connections/$(incoming().connectionId)).data.participantUids;
+
+      allow update: if isSignedIn() &&
+                       isValidId(meetupId) &&
+                       isValidMeetup(incoming()) && (
+                         isAdmin() ||
+                         (request.auth.uid in existing().participantUids &&
+                          existing().status in ['PROPOSED', 'CONFIRMED'] &&
+                          incoming().connectionId == existing().connectionId &&
+                          incoming().participantUids == existing().participantUids &&
+                          incoming().proposerUid == existing().proposerUid &&
+                          incoming().createdAt == existing().createdAt &&
+                          (
+                            (existing().status == 'PROPOSED' && request.auth.uid != existing().proposerUid && incoming().status == 'CONFIRMED' && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'confirmedByUid', 'updatedAt'])) ||
+                            (incoming().status == 'CANCELLED' && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'cancelledByUid', 'updatedAt'])) ||
+                            (existing().status == 'CONFIRMED' && incoming().status == 'COMPLETED' && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt']))
+                          ))
+                       );
+
+      allow delete: if isAdmin();
+    }
+
+    match /calls/{callId} {
+      allow get: if isSignedIn() && isValidId(callId) && (request.auth.uid in existing().participantUids || isAdmin());
+      allow list: if isSignedIn() && (request.auth.uid in existing().participantUids || isAdmin());
+
+      allow create: if isSignedIn() &&
+                       isValidId(callId) &&
+                       incoming().callerUid == request.auth.uid &&
+                       incoming().status == 'RINGING' &&
+                       incoming().keys().hasAll(['connectionId', 'callerUid', 'calleeUid', 'callerName', 'calleeName', 'participantUids', 'status', 'durationSeconds', 'startedAtMillis', 'endedAtMillis', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['connectionId', 'callerUid', 'calleeUid', 'callerName', 'calleeName', 'participantUids', 'status', 'offerSdp', 'answerSdp', 'durationSeconds', 'startedAtMillis', 'endedAtMillis', 'createdAt', 'updatedAt']) &&
+                       isValidCall(incoming()) &&
+                       exists(/databases/$(database)/documents/connections/$(incoming().connectionId)) &&
+                       get(/databases/$(database)/documents/connections/$(incoming().connectionId)).data.status == 'ACTIVE' &&
+                       request.auth.uid in get(/databases/$(database)/documents/connections/$(incoming().connectionId)).data.participantUids;
+
+      allow update: if isSignedIn() &&
+                       isValidId(callId) &&
+                       isValidCall(incoming()) && (
+                         isAdmin() ||
+                         (request.auth.uid in existing().participantUids &&
+                          existing().status in ['RINGING', 'ACTIVE'] &&
+                          incoming().connectionId == existing().connectionId &&
+                          incoming().callerUid == existing().callerUid &&
+                          incoming().calleeUid == existing().calleeUid &&
+                          incoming().participantUids == existing().participantUids &&
+                          incoming().createdAt == existing().createdAt &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['status', 'offerSdp', 'answerSdp', 'durationSeconds', 'startedAtMillis', 'endedAtMillis', 'updatedAt']))
+                       );
+
+      allow delete: if isAdmin();
+
+      match /candidates/{candidateId} {
+        allow get: if isSignedIn() && isValidId(candidateId) && request.auth.uid in existing().participantUids;
+        allow list: if isSignedIn() && request.auth.uid in existing().participantUids;
+
+        allow create: if isSignedIn() &&
+                         isValidId(candidateId) &&
+                         incoming().senderUid == request.auth.uid &&
+                         incoming().keys().hasAll(['senderUid', 'participantUids', 'sdpMid', 'sdpMLineIndex', 'candidate', 'createdAt']) &&
+                         incoming().keys().hasOnly(['senderUid', 'participantUids', 'sdpMid', 'sdpMLineIndex', 'candidate', 'createdAt']) &&
+                         isValidIceCandidate(incoming());
+
+        allow update, delete: if false;
+      }
+    }
+
+    match /blocked_users/{blockId} {
+      allow get: if isSignedIn() && isValidId(blockId) && (
+        existing().blockerUid == request.auth.uid ||
+        existing().blockedUid == request.auth.uid ||
+        isAdmin()
+      );
+      allow list: if isSignedIn() && (
+        existing().blockerUid == request.auth.uid ||
+        existing().blockedUid == request.auth.uid ||
+        isAdmin()
+      );
+
+      allow create: if isSignedIn() &&
+                       isValidId(blockId) &&
+                       incoming().blockerUid == request.auth.uid &&
+                       blockId == (request.auth.uid + '_' + incoming().blockedUid) &&
+                       incoming().keys().hasAll(['blockerUid', 'blockedUid', 'blockedName', 'createdAt']) &&
+                       incoming().keys().hasOnly(['blockerUid', 'blockedUid', 'blockedName', 'reason', 'createdAt']) &&
+                       isValidBlockRecord(incoming());
+
+      allow update: if false;
+      allow delete: if isSignedIn() && isValidId(blockId) && (existing().blockerUid == request.auth.uid || isAdmin());
+    }
+
+    match /reports/{reportId} {
+      allow get: if isSignedIn() && isValidId(reportId) && (existing().reporterUid == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (existing().reporterUid == request.auth.uid || isAdmin());
+
+      allow create: if isSignedIn() &&
+                       isValidId(reportId) &&
+                       incoming().reporterUid == request.auth.uid &&
+                       incoming().status == 'OPEN' &&
+                       incoming().keys().hasAll(['reporterUid', 'reportedUid', 'reportedName', 'category', 'details', 'status', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['reporterUid', 'reportedUid', 'reportedName', 'category', 'details', 'status', 'adminNotes', 'createdAt', 'updatedAt']) &&
+                       isValidReport(incoming());
+
+      allow update: if isSignedIn() &&
+                       isValidId(reportId) &&
+                       isAdmin() &&
+                       isValidReport(incoming()) &&
+                       incoming().reporterUid == existing().reporterUid &&
+                       incoming().reportedUid == existing().reportedUid &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['status', 'adminNotes', 'updatedAt']);
+
+      allow delete: if isAdmin();
+    }
+
+    match /notifications/{notificationId} {
+      allow get: if isSignedIn() && isValidId(notificationId) && (existing().recipientUid == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (existing().recipientUid == request.auth.uid || isAdmin());
+
+      allow create: if isSignedIn() &&
+                       isValidId(notificationId) &&
+                       incoming().actorUid == request.auth.uid &&
+                       incoming().isRead == false &&
+                       incoming().keys().hasAll(['recipientUid', 'actorUid', 'actorName', 'type', 'title', 'body', 'referenceId', 'isRead', 'createdAt']) &&
+                       incoming().keys().hasOnly(['recipientUid', 'actorUid', 'actorName', 'type', 'title', 'body', 'referenceId', 'isRead', 'createdAt']) &&
+                       isValidNotification(incoming());
+
+      allow update: if isSignedIn() &&
+                       isValidId(notificationId) &&
+                       isValidNotification(incoming()) &&
+                       existing().recipientUid == request.auth.uid &&
+                       incoming().recipientUid == existing().recipientUid &&
+                       incoming().actorUid == existing().actorUid &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['isRead']);
+
+      allow delete: if isSignedIn() && isValidId(notificationId) && (existing().recipientUid == request.auth.uid || isAdmin());
+    }
+  }
+}

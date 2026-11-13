@@ -1,0 +1,12 @@
+<resources>
+    <string name="app_name">FriendsHub</string>
+    <string name="app_tagline">Find a friend. Share a moment.</string>
+    <string name="sign_in_with_google">Continue with Google</string>
+    <string name="nav_home">Home</string>
+    <string name="nav_discover">Discover</string>
+    <string name="nav_connections">Connections</string>
+    <string name="nav_activity">Activity</string>
+    <string name="nav_profile">Profile</string>
+    <string name="availability_title">Available to meet people</string>
+    <string name="location_privacy_notice">Only your approximate distance and area name are shown to nearby verified members. Exact GPS coordinates and personal contact info are never shared.</string>
+</resources>

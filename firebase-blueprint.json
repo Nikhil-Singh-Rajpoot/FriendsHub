@@ -1,0 +1,264 @@
+{
+  "entities": {
+    "UserAccount": {
+      "title": "UserAccount",
+      "description": "Private user account, 18+ age verification, role, and notification preferences.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "Firebase Auth UID" },
+        "displayName": { "type": "string", "description": "Full display name" },
+        "email": { "type": "string", "description": "Account email" },
+        "phoneNote": { "type": "string", "description": "Private optional phone reference" },
+        "dateOfBirthMillis": { "type": "integer", "description": "UTC epoch millis of birth date" },
+        "isAdultVerified": { "type": "boolean", "description": "Confirmed 18+ years old" },
+        "accountStatus": { "type": "string", "enum": ["ACTIVE", "SUSPENDED"] },
+        "role": { "type": "string", "enum": ["USER", "ADMIN"] },
+        "pushNotificationsEnabled": { "type": "boolean" },
+        "callAlertsEnabled": { "type": "boolean" },
+        "meetupRemindersEnabled": { "type": "boolean" },
+        "onboardingCompleted": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Client submits FieldValue.serverTimestamp()" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Client submits FieldValue.serverTimestamp()" }
+      },
+      "required": ["uid", "displayName", "dateOfBirthMillis", "isAdultVerified", "accountStatus", "role", "pushNotificationsEnabled", "callAlertsEnabled", "meetupRemindersEnabled", "onboardingCompleted", "createdAt", "updatedAt"]
+    },
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Public discovery profile without PII or exact GPS coordinates.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "firstName": { "type": "string" },
+        "age": { "type": "integer" },
+        "gender": { "type": "string" },
+        "bio": { "type": "string" },
+        "cityArea": { "type": "string" },
+        "photoData": { "type": "string" },
+        "interests": { "type": "array" },
+        "isVerified": { "type": "boolean" },
+        "isAvailable": { "type": "boolean" },
+        "preferredActivity": { "type": "string" },
+        "availabilityDurationMinutes": { "type": "integer" },
+        "availabilityExpiresAtMillis": { "type": "integer" },
+        "approxLat": { "type": "number" },
+        "approxLng": { "type": "number" },
+        "locationUpdatedAtMillis": { "type": "integer" },
+        "discoveryOptIn": { "type": "boolean" },
+        "accountStatus": { "type": "string", "enum": ["ACTIVE", "SUSPENDED"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "firstName", "age", "bio", "cityArea", "interests", "isVerified", "isAvailable", "preferredActivity", "availabilityDurationMinutes", "availabilityExpiresAtMillis", "approxLat", "approxLng", "locationUpdatedAtMillis", "discoveryOptIn", "accountStatus", "createdAt", "updatedAt"]
+    },
+    "AvailabilitySession": {
+      "title": "AvailabilitySession",
+      "description": "Timed user availability window for nearby discovery.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "activity": { "type": "string" },
+        "durationMinutes": { "type": "integer" },
+        "status": { "type": "string", "enum": ["ACTIVE", "ENDED", "EXPIRED"] },
+        "startedAtMillis": { "type": "integer" },
+        "expiresAtMillis": { "type": "integer" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "activity", "durationMinutes", "status", "startedAtMillis", "expiresAtMillis", "createdAt", "updatedAt"]
+    },
+    "ConnectionRequest": {
+      "title": "ConnectionRequest",
+      "description": "Invitation sent from one user to another for a shared activity.",
+      "type": "object",
+      "properties": {
+        "fromUid": { "type": "string" },
+        "toUid": { "type": "string" },
+        "fromName": { "type": "string" },
+        "toName": { "type": "string" },
+        "fromCityArea": { "type": "string" },
+        "activity": { "type": "string" },
+        "message": { "type": "string" },
+        "status": { "type": "string", "enum": ["PENDING", "ACCEPTED", "REJECTED", "CANCELLED"] },
+        "participantUids": { "type": "array" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["fromUid", "toUid", "fromName", "toName", "activity", "message", "status", "participantUids", "createdAt", "updatedAt"]
+    },
+    "Connection": {
+      "title": "Connection",
+      "description": "Accepted friendship connection between two users.",
+      "type": "object",
+      "properties": {
+        "participantUids": { "type": "array" },
+        "userAUid": { "type": "string" },
+        "userBUid": { "type": "string" },
+        "userAName": { "type": "string" },
+        "userBName": { "type": "string" },
+        "userACity": { "type": "string" },
+        "userBCity": { "type": "string" },
+        "activity": { "type": "string" },
+        "requestId": { "type": "string" },
+        "status": { "type": "string", "enum": ["ACTIVE", "ENDED"] },
+        "endedByUid": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["participantUids", "userAUid", "userBUid", "userAName", "userBName", "activity", "requestId", "status", "createdAt", "updatedAt"]
+    },
+    "Meetup": {
+      "title": "Meetup",
+      "description": "Public place meetup proposal between two connected users.",
+      "type": "object",
+      "properties": {
+        "connectionId": { "type": "string" },
+        "participantUids": { "type": "array" },
+        "proposerUid": { "type": "string" },
+        "proposerName": { "type": "string" },
+        "otherUid": { "type": "string" },
+        "otherName": { "type": "string" },
+        "activity": { "type": "string" },
+        "scheduledDateText": { "type": "string" },
+        "scheduledTimeText": { "type": "string" },
+        "publicLocationName": { "type": "string" },
+        "publicArea": { "type": "string" },
+        "notes": { "type": "string" },
+        "status": { "type": "string", "enum": ["PROPOSED", "CONFIRMED", "CANCELLED", "COMPLETED"] },
+        "confirmedByUid": { "type": "string" },
+        "cancelledByUid": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["connectionId", "participantUids", "proposerUid", "proposerName", "otherUid", "otherName", "activity", "scheduledDateText", "scheduledTimeText", "publicLocationName", "publicArea", "notes", "status", "createdAt", "updatedAt"]
+    },
+    "VoiceCall": {
+      "title": "VoiceCall",
+      "description": "In-app WebRTC voice call session and SDP signaling.",
+      "type": "object",
+      "properties": {
+        "connectionId": { "type": "string" },
+        "callerUid": { "type": "string" },
+        "calleeUid": { "type": "string" },
+        "callerName": { "type": "string" },
+        "calleeName": { "type": "string" },
+        "participantUids": { "type": "array" },
+        "status": { "type": "string", "enum": ["RINGING", "ACTIVE", "DECLINED", "MISSED", "ENDED", "FAILED"] },
+        "offerSdp": { "type": "string" },
+        "answerSdp": { "type": "string" },
+        "durationSeconds": { "type": "integer" },
+        "startedAtMillis": { "type": "integer" },
+        "endedAtMillis": { "type": "integer" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["connectionId", "callerUid", "calleeUid", "callerName", "calleeName", "participantUids", "status", "durationSeconds", "startedAtMillis", "endedAtMillis", "createdAt", "updatedAt"]
+    },
+    "IceCandidateRecord": {
+      "title": "IceCandidateRecord",
+      "description": "WebRTC ICE candidate exchanged between call participants.",
+      "type": "object",
+      "properties": {
+        "senderUid": { "type": "string" },
+        "participantUids": { "type": "array" },
+        "sdpMid": { "type": "string" },
+        "sdpMLineIndex": { "type": "integer" },
+        "candidate": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["senderUid", "participantUids", "sdpMid", "sdpMLineIndex", "candidate", "createdAt"]
+    },
+    "BlockedUser": {
+      "title": "BlockedUser",
+      "description": "Directional user block record.",
+      "type": "object",
+      "properties": {
+        "blockerUid": { "type": "string" },
+        "blockedUid": { "type": "string" },
+        "blockedName": { "type": "string" },
+        "reason": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["blockerUid", "blockedUid", "blockedName", "createdAt"]
+    },
+    "SafetyReport": {
+      "title": "SafetyReport",
+      "description": "User safety report for admin moderation review.",
+      "type": "object",
+      "properties": {
+        "reporterUid": { "type": "string" },
+        "reportedUid": { "type": "string" },
+        "reportedName": { "type": "string" },
+        "category": { "type": "string" },
+        "details": { "type": "string" },
+        "status": { "type": "string", "enum": ["OPEN", "REVIEWED", "ACTIONED", "DISMISSED"] },
+        "adminNotes": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["reporterUid", "reportedUid", "reportedName", "category", "details", "status", "createdAt", "updatedAt"]
+    },
+    "AppNotification": {
+      "title": "AppNotification",
+      "description": "In-app notification item for requests, calls, and meetups.",
+      "type": "object",
+      "properties": {
+        "recipientUid": { "type": "string" },
+        "actorUid": { "type": "string" },
+        "actorName": { "type": "string" },
+        "type": { "type": "string" },
+        "title": { "type": "string" },
+        "body": { "type": "string" },
+        "referenceId": { "type": "string" },
+        "isRead": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["recipientUid", "actorUid", "actorName", "type", "title", "body", "referenceId", "isRead", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserAccount" },
+      "description": "Private user account, DOB verification, preferences, and moderation role."
+    },
+    "/user_profiles/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Public-safe discovery profiles with coarse grid coordinates and interests."
+    },
+    "/availability_sessions/{sessionId}": {
+      "schema": { "$ref": "#/entities/AvailabilitySession" },
+      "description": "User availability session history and active windows."
+    },
+    "/connection_requests/{requestId}": {
+      "schema": { "$ref": "#/entities/ConnectionRequest" },
+      "description": "Connection requests between two users."
+    },
+    "/connections/{connectionId}": {
+      "schema": { "$ref": "#/entities/Connection" },
+      "description": "Active and ended friendship connections."
+    },
+    "/meetups/{meetupId}": {
+      "schema": { "$ref": "#/entities/Meetup" },
+      "description": "Planned public-location meetups between connected users."
+    },
+    "/calls/{callId}": {
+      "schema": { "$ref": "#/entities/VoiceCall" },
+      "description": "WebRTC in-app voice call sessions and SDP signaling."
+    },
+    "/calls/{callId}/candidates/{candidateId}": {
+      "schema": { "$ref": "#/entities/IceCandidateRecord" },
+      "description": "ICE candidates for active WebRTC voice call negotiation."
+    },
+    "/blocked_users/{blockId}": {
+      "schema": { "$ref": "#/entities/BlockedUser" },
+      "description": "Blocked user pairs."
+    },
+    "/reports/{reportId}": {
+      "schema": { "$ref": "#/entities/SafetyReport" },
+      "description": "Safety and abuse reports."
+    },
+    "/notifications/{notificationId}": {
+      "schema": { "$ref": "#/entities/AppNotification" },
+      "description": "In-app notifications scoped per recipient."
+    }
+  }
+}

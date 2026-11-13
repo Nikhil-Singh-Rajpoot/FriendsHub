@@ -36,6 +36,17 @@ jobs:
           fi
           keytool -list -v -keystore debug.keystore -alias androiddebugkey -storepass android -keypass android | grep -E "SHA1:|SHA256:" || true
 
+      - name: Prepare Firebase google-services.json (optional secret)
+        env:
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+        run: |
+          if [ ! -f app/google-services.json ] && [ -n "$GOOGLE_SERVICES_JSON" ]; then
+            printf '%s' "$GOOGLE_SERVICES_JSON" > app/google-services.json
+          fi
+          if [ ! -f app/google-services.json ]; then
+            echo "::warning::app/google-services.json is missing (AI Studio omits it on export). Add it to your repo or as GOOGLE_SERVICES_JSON secret so Firebase Auth/Google Sign-In work at runtime."
+          fi
+
       - name: Accept Android SDK licenses
         run: |
           SDK_DIR="${ANDROID_HOME:-/usr/local/lib/android/sdk}"

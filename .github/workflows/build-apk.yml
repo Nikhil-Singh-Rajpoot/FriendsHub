@@ -51,17 +51,37 @@ jobs:
           path: debug.keystore
           key: friendshub-debug-keystore-v1
 
-      - name: Prepare Firebase google-services.json
+      - name: Prepare and validate Firebase google-services.json
         env:
-          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+          GOOGLE_SERVICES_SECRET: ${{ secrets.GOOGLE_SERVICES_JSON }}
+          GOOGLE_SERVICES_VAR: ${{ vars.GOOGLE_SERVICES_JSON }}
         run: |
-          if [ ! -f app/google-services.json ] && [ -n "$GOOGLE_SERVICES_JSON" ]; then
-            printf '%s' "$GOOGLE_SERVICES_JSON" > app/google-services.json
+          if [ ! -f app/google-services.json ]; then
+            RAW_JSON="${GOOGLE_SERVICES_SECRET:-$GOOGLE_SERVICES_VAR}"
+            if [ -n "$RAW_JSON" ]; then
+              printf '%s' "$RAW_JSON" > app/google-services.json
+            fi
           fi
           if [ ! -f app/google-services.json ]; then
-            echo "::error::Missing app/google-services.json. Add the GOOGLE_SERVICES_JSON repository secret (from Firebase Console or AI Studio's app/google-services.json) so Google Sign-In and Firestore work in the APK."
+            echo "::error::Missing app/google-services.json. Add GOOGLE_SERVICES_JSON under GitHub Settings -> Secrets and variables -> Actions -> Secrets."
             exit 1
           fi
+          python3 - <<'PY'
+          import json, sys
+          with open("app/google-services.json", "r", encoding="utf-8") as f:
+              data = json.load(f)
+          clients = data.get("client", [])
+          matching = [c for c in clients if c.get("client_info", {}).get("android_client_info", {}).get("package_name") == "com.aistudio.friendshub.vkmrqp"]
+          if not matching:
+              print("::error::google-services.json does not contain package com.aistudio.friendshub.vkmrqp", file=sys.stderr)
+              sys.exit(1)
+          oauth_clients = matching[0].get("oauth_client", [])
+          has_web_client = any(o.get("client_type") == 3 for o in oauth_clients)
+          if not has_web_client:
+              print("::error::google-services.json is missing client_type 3 (default_web_client_id). Enable Google Sign-In in Firebase Auth and re-download google-services.json.", file=sys.stderr)
+              sys.exit(1)
+          print("Validated google-services.json for project:", data.get("project_info", {}).get("project_id"))
+          PY
 
       - name: Accept Android SDK licenses
         run: |
@@ -81,7 +101,16 @@ jobs:
           gradle-version: '9.3.1'
 
       - name: Build Debug APK
-        run: gradle assembleDebug --no-daemon
+        run: gradle assembleDebug --no-daemon --no-build-cache
+
+      - name: Verify Google Sign-In config is baked into APK resources
+        run: |
+          VALUES_XML="app/build/generated/res/processDebugGoogleServices/values/values.xml"
+          if [ ! -f "$VALUES_XML" ] || ! grep -q 'name="default_web_client_id"' "$VALUES_XML"; then
+            echo "::error::default_web_client_id was not generated into APK resources!"
+            exit 1
+          fi
+          echo "Verified default_web_client_id is present in compiled APK resources."
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4

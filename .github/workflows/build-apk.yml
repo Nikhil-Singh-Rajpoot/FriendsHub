@@ -19,6 +19,13 @@ jobs:
           distribution: temurin
           java-version: '21'
 
+      - name: Restore cached debug keystore
+        id: keystore-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: debug.keystore
+          key: friendshub-debug-keystore-v1
+
       - name: Prepare debug keystore
         run: |
           if [ -f debug.keystore.base64 ]; then
@@ -34,9 +41,17 @@ jobs:
               -validity 10000 \
               -dname "CN=Android Debug,O=Android,C=US"
           fi
+          echo "=== Copy this SHA1 into Firebase Console for Google Sign-In ==="
           keytool -list -v -keystore debug.keystore -alias androiddebugkey -storepass android -keypass android | grep -E "SHA1:|SHA256:" || true
 
-      - name: Prepare Firebase google-services.json (optional secret)
+      - name: Save debug keystore cache
+        if: steps.keystore-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: debug.keystore
+          key: friendshub-debug-keystore-v1
+
+      - name: Prepare Firebase google-services.json
         env:
           GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
         run: |
@@ -44,7 +59,8 @@ jobs:
             printf '%s' "$GOOGLE_SERVICES_JSON" > app/google-services.json
           fi
           if [ ! -f app/google-services.json ]; then
-            echo "::warning::app/google-services.json is missing (AI Studio omits it on export). Add it to your repo or as GOOGLE_SERVICES_JSON secret so Firebase Auth/Google Sign-In work at runtime."
+            echo "::error::Missing app/google-services.json. Add the GOOGLE_SERVICES_JSON repository secret (from Firebase Console or AI Studio's app/google-services.json) so Google Sign-In and Firestore work in the APK."
+            exit 1
           fi
 
       - name: Accept Android SDK licenses

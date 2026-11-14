@@ -172,18 +172,23 @@ class FriendsHubRepository(private val db: FirebaseFirestore) {
   ): Result<Unit> = runCatching {
     val uid = requireUserId()
     val docRef = db.collection("user_profiles").document(uid)
+    val cleanInterests = interests.take(10)
     val updates =
-      mapOf(
+      mutableMapOf<String, Any>(
         "firstName" to firstName.trim().take(50),
         "bio" to bio.trim().take(300),
         "cityArea" to cityArea.trim().take(80),
         "gender" to gender.trim().take(30),
         "photoData" to photoData,
-        "interests" to interests.take(10),
+        "interests" to cleanInterests,
         "discoveryOptIn" to discoveryOptIn,
         "updatedAt" to FieldValue.serverTimestamp(),
       )
     try {
+      val currentPreferred = docRef.get().await().getString("preferredActivity").orEmpty()
+      if (cleanInterests.isNotEmpty() && currentPreferred !in cleanInterests) {
+        updates["preferredActivity"] = cleanInterests.first()
+      }
       docRef.set(updates, SetOptions.merge()).await()
     } catch (e: CancellationException) {
       throw e
@@ -268,6 +273,28 @@ class FriendsHubRepository(private val db: FirebaseFirestore) {
       throw e
     } catch (e: Exception) {
       handleFirestoreError(e, OperationType.WRITE, profileRef.path)
+      throw e
+    }
+  }
+
+  suspend fun updateLiveActivity(activity: String): Result<Unit> = runCatching {
+    val uid = requireUserId()
+    val profileRef = db.collection("user_profiles").document(uid)
+    val cleanActivity = activity.ifBlank { "Have tea or coffee" }.take(40)
+    try {
+      profileRef
+        .set(
+          mapOf(
+            "preferredActivity" to cleanActivity,
+            "updatedAt" to FieldValue.serverTimestamp(),
+          ),
+          SetOptions.merge(),
+        )
+        .await()
+    } catch (e: CancellationException) {
+      throw e
+    } catch (e: Exception) {
+      handleFirestoreError(e, OperationType.UPDATE, profileRef.path)
       throw e
     }
   }

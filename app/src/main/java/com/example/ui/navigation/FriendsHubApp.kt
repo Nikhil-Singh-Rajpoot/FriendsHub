@@ -250,6 +250,7 @@ private fun AuthenticatedAppShell(
   val context = LocalContext.current
   val accountState by viewModel.accountState.collectAsStateWithLifecycle()
   val myProfileState by viewModel.myProfileState.collectAsStateWithLifecycle()
+  val availableProfiles by viewModel.availableProfiles.collectAsStateWithLifecycle()
   val nearbyUsers by viewModel.nearbyUsers.collectAsStateWithLifecycle()
   val requests by viewModel.requests.collectAsStateWithLifecycle()
   val connections by viewModel.connections.collectAsStateWithLifecycle()
@@ -260,6 +261,7 @@ private fun AuthenticatedAppShell(
   val sessions by viewModel.sessions.collectAsStateWithLifecycle()
   val radiusFilter by viewModel.radiusFilter.collectAsStateWithLifecycle()
   val activityFilter by viewModel.activityFilter.collectAsStateWithLifecycle()
+  val isEnablingAvailability by viewModel.isEnablingAvailability.collectAsStateWithLifecycle()
   val activeCall by viewModel.activeCall.collectAsStateWithLifecycle()
   val isMuted by viewModel.isMuted.collectAsStateWithLifecycle()
   val isSpeakerOn by viewModel.isSpeakerOn.collectAsStateWithLifecycle()
@@ -366,34 +368,35 @@ private fun AuthenticatedAppShell(
   // Sub-screens take full screen cleanly with BackHandler
   when (val sub = activeSubScreen) {
     is SubScreen.ProfileDetails -> {
+      val liveProfile = availableProfiles.firstOrNull { it.uid == sub.profile.uid } ?: sub.profile
       val distKm = LocationPrivacy.distanceKm(
         myProfile.approxLat,
         myProfile.approxLng,
-        sub.profile.approxLat,
-        sub.profile.approxLng,
+        liveProfile.approxLat,
+        liveProfile.approxLng,
       )
       val distLabel =
-        if (myProfile.approxLat == 0.0) sub.profile.cityArea
+        if (myProfile.approxLat == 0.0) liveProfile.cityArea
         else LocationPrivacy.formatApproxDistance(distKm)
-      val common = sub.profile.interests.filter { it in myProfile.interests }
+      val common = liveProfile.interests.filter { it in myProfile.interests }
 
       UserProfileDetailsScreen(
-        profile = sub.profile,
+        profile = liveProfile,
         distanceLabel = distLabel,
         commonInterests = common,
         onBack = { activeSubScreen = null },
         onSendRequest = { act, msg ->
-          viewModel.sendConnectionRequest(sub.profile, act, msg) {
+          viewModel.sendConnectionRequest(liveProfile, act, msg) {
             activeSubScreen = null
           }
         },
         onBlockUser = {
-          viewModel.blockUser(sub.profile.uid, sub.profile.firstName) {
+          viewModel.blockUser(liveProfile.uid, liveProfile.firstName) {
             activeSubScreen = null
           }
         },
         onReportUser = { cat, details ->
-          viewModel.reportUser(sub.profile.uid, sub.profile.firstName, cat, details) {
+          viewModel.reportUser(liveProfile.uid, liveProfile.firstName, cat, details) {
             activeSubScreen = null
           }
         },
@@ -447,6 +450,7 @@ private fun AuthenticatedAppShell(
         account = account,
         onBack = { activeSubScreen = null },
         onSavePrefs = { p, c, m -> viewModel.updateNotificationPreferences(p, c, m) },
+        onOpenAdminGate = { activeSubScreen = SubScreen.AdminModeration },
       )
       return
     }
@@ -472,6 +476,8 @@ private fun AuthenticatedAppShell(
 
     SubScreen.AdminModeration -> {
       AdminModerationScreen(
+        currentSignedInEmail = userEmail,
+        isEmailVerified = Firebase.auth.currentUser?.isEmailVerified == true,
         snapshot = adminSnapshot,
         isLoading = adminLoading,
         onLoad = { viewModel.loadAdminDashboard() },
@@ -562,7 +568,9 @@ private fun AuthenticatedAppShell(
                   activeConnectionsCount = activeConnectionsCount,
                   upcomingMeetups = upcomingMeetups,
                   unreadNotifications = unreadNotifications,
+                  isEnablingAvailability = isEnablingAvailability,
                   onEnableAvailability = { act, dur -> viewModel.turnOnAvailability(context, act, dur) },
+                  onUpdateLiveActivity = { act -> viewModel.updateLiveActivity(act) },
                   onDisableAvailability = { viewModel.turnOffAvailability() },
                   onActivityShortcutClick = { act ->
                     viewModel.setActivityFilter(act)
@@ -632,7 +640,6 @@ private fun AuthenticatedAppShell(
                   onOpenBlockedUsers = { activeSubScreen = SubScreen.BlockedUsers },
                   onOpenPrivacy = { activeSubScreen = SubScreen.PrivacyPolicy },
                   onOpenTerms = { activeSubScreen = SubScreen.Terms },
-                  onOpenAdmin = { activeSubScreen = SubScreen.AdminModeration },
                   onSignOut = onSignOut,
                   onDeleteAccount = {
                     viewModel.deleteMyAccountData { onSignOut() }

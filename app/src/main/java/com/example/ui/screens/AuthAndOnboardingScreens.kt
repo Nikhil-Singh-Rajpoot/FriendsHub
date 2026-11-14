@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
@@ -206,12 +207,14 @@ fun AuthWelcomeScreen(
           shape = MaterialTheme.shapes.small,
           modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
         ) {
-          Text(
-            text = errorMsg!!,
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.error,
-            modifier = Modifier.padding(12.dp),
-          )
+          SelectionContainer {
+            Text(
+              text = errorMsg!!,
+              style = MaterialTheme.typography.bodyMedium,
+              color = MaterialTheme.colorScheme.error,
+              modifier = Modifier.padding(12.dp),
+            )
+          }
         }
       }
 
@@ -230,7 +233,10 @@ fun AuthWelcomeScreen(
               isLoading = false
               errorMsg = msg
             },
-            onAuthCancelled = { isLoading = false },
+            onAuthCancelled = { hint ->
+              isLoading = false
+              errorMsg = hint
+            },
             scope = scope,
           )
         },

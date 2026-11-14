@@ -68,7 +68,18 @@ class FriendsHubRepositoryRuleTest : FirestoreEmulatorTestBase() {
       aliceRepo.observeAvailableProfiles(aliceUid).first { list -> list.any { it.uid == bobUid } }
     }
     val bobProfile = availableForAlice.first { it.uid == bobUid }
+    assertTrue("isAvailable must deserialize to true from Firestore", bobProfile.isAvailable)
+    assertTrue(bobProfile.isCurrentlyAvailable())
+    assertEquals("Have tea or coffee", bobProfile.preferredActivity)
     val aliceProfile = withTimeout(TIMEOUT_MS) { aliceRepo.getProfileById(aliceUid).getOrThrow()!! }
+
+    // Bob switches live activity from Tea/Coffee to Eat something and back -> reflected live
+    signInTestUser(bobEmail)
+    assertTrue(withTimeout(TIMEOUT_MS) { bobRepo.updateLiveActivity("Eat something") }.isSuccess)
+    val bobAfterUpdate = withTimeout(TIMEOUT_MS) { bobRepo.getProfileById(bobUid).getOrThrow()!! }
+    assertEquals("Eat something", bobAfterUpdate.preferredActivity)
+    assertTrue(withTimeout(TIMEOUT_MS) { bobRepo.updateLiveActivity("Have tea or coffee") }.isSuccess)
+    signInTestUser(aliceEmail)
 
     // 4. Alice sends a connection request to Bob
     val sendReq = withTimeout(TIMEOUT_MS) {

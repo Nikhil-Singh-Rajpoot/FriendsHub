@@ -38,6 +38,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 class FriendsHubViewModel(
   private val repository: FriendsHubRepository,
@@ -53,6 +54,9 @@ class FriendsHubViewModel(
 
   private val _activityFilter = MutableStateFlow<String?>(null)
   val activityFilter: StateFlow<String?> = _activityFilter.asStateFlow()
+
+  private val _isEnablingAvailability = MutableStateFlow(false)
+  val isEnablingAvailability: StateFlow<Boolean> = _isEnablingAvailability.asStateFlow()
 
   // Live Account & Profile
   val accountState: StateFlow<UiState<UserAccount?>> =
@@ -152,7 +156,8 @@ class FriendsHubViewModel(
         .filter { profile ->
           activity.isNullOrBlank() ||
             profile.preferredActivity.contains(activity, ignoreCase = true) ||
-            profile.interests.any { it.contains(activity, ignoreCase = true) }
+            (profile.preferredActivity.isBlank() &&
+              profile.interests.any { it.contains(activity, ignoreCase = true) })
         }
         .map { profile ->
           val distKm = LocationPrivacy.distanceKm(myLat, myLng, profile.approxLat, profile.approxLng)
@@ -314,18 +319,38 @@ class FriendsHubViewModel(
     duration: AvailabilityDuration,
   ) {
     viewModelScope.launch {
-      val coords = LocationPrivacy.fetchCoarseDeviceLocation(context)
-      if (coords == null) {
-        _statusMessage.value = "Please enable device location so nearby friends can find your distance."
-        return@launch
+      _isEnablingAvailability.value = true
+      try {
+        val fetchedCoords = withTimeoutOrNull(5000L) {
+          LocationPrivacy.fetchCoarseDeviceLocation(context)
+        }
+        val currentProfile = (myProfileState.value as? UiState.Success)?.data
+        val fallbackLat = currentProfile?.approxLat ?: 0.0
+        val fallbackLng = currentProfile?.approxLng ?: 0.0
+        val coords = fetchedCoords ?: (fallbackLat to fallbackLng)
+        repository.startAvailability(activity, duration.minutes, coords.first, coords.second)
+          .onSuccess {
+            _statusMessage.value =
+              if (fetchedCoords != null) {
+                "You're now visible nearby for ${duration.label} ($activity)."
+              } else {
+                "You're now live for ${duration.label} ($activity) using your city area."
+              }
+          }
+          .onFailure {
+            _statusMessage.value = it.localizedMessage ?: "Could not enable availability"
+          }
+      } finally {
+        _isEnablingAvailability.value = false
       }
-      repository.startAvailability(activity, duration.minutes, coords.first, coords.second)
-        .onSuccess {
-          _statusMessage.value = "You're now visible nearby for ${duration.label}."
-        }
-        .onFailure {
-          _statusMessage.value = it.localizedMessage ?: "Could not enable availability"
-        }
+    }
+  }
+
+  fun updateLiveActivity(activity: String) {
+    viewModelScope.launch {
+      repository.updateLiveActivity(activity)
+        .onSuccess { _statusMessage.value = "Updated live activity to $activity." }
+        .onFailure { _statusMessage.value = it.localizedMessage ?: "Could not update activity" }
     }
   }
 

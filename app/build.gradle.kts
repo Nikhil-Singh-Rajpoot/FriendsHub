@@ -21,6 +21,19 @@ android {
     versionName = "1.0"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    val envFile = rootProject.file(".env")
+    val envAccessKey =
+      if (envFile.exists()) {
+        envFile.readLines()
+          .firstOrNull { it.trim().startsWith("ADMIN_ACCESS_KEY=") }
+          ?.substringAfter("ADMIN_ACCESS_KEY=")
+          ?.trim()
+          ?.removeSurrounding("\"")
+      } else null
+    val adminAccessKey = (envAccessKey ?: System.getenv("ADMIN_ACCESS_KEY") ?: "")
+      .replace("\\", "\\\\")
+      .replace("\"", "\\\"")
+    buildConfigField("String", "ADMIN_ACCESS_KEY", "\"$adminAccessKey\"")
   }
 
   // Do not remove or modify these signingConfigs. They are necessary for building, installing,
@@ -77,6 +90,7 @@ secrets {
   propertiesFileName = ".env"
   defaultPropertiesFileName = ".env.example"
   ignoreList.add("FIREBASE_APPCHECK_DEBUG_TOKEN")
+  ignoreList.add("ADMIN_ACCESS_KEY")
 }
 
 googleServices { missingGoogleServicesStrategy = MissingGoogleServicesStrategy.WARN }

@@ -110,6 +110,18 @@ object LocationPrivacy {
 
   @SuppressLint("MissingPermission")
   suspend fun fetchCoarseDeviceLocation(context: Context): Pair<Double, Double>? {
+    val hasCoarse =
+      androidx.core.content.ContextCompat.checkSelfPermission(
+        context,
+        android.Manifest.permission.ACCESS_COARSE_LOCATION,
+      ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+    val hasFine =
+      androidx.core.content.ContextCompat.checkSelfPermission(
+        context,
+        android.Manifest.permission.ACCESS_FINE_LOCATION,
+      ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+    if (!hasCoarse && !hasFine) return null
+
     val client = LocationServices.getFusedLocationProviderClient(context.applicationContext)
     return suspendCancellableCoroutine { cont ->
       val cts = CancellationTokenSource()

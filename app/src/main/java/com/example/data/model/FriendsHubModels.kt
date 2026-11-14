@@ -3,6 +3,7 @@ package com.example.data.model
 import com.google.firebase.Timestamp
 import com.google.firebase.firestore.DocumentId
 import com.google.firebase.firestore.IgnoreExtraProperties
+import com.google.firebase.firestore.PropertyName
 import com.google.firebase.firestore.ServerTimestamp
 
 sealed interface UiState<out T> {
@@ -48,7 +49,9 @@ data class UserAccount(
   val email: String = "",
   val phoneNote: String = "",
   val dateOfBirthMillis: Long = 0L,
-  val isAdultVerified: Boolean = false,
+  @get:PropertyName("isAdultVerified")
+  @set:PropertyName("isAdultVerified")
+  var isAdultVerified: Boolean = false,
   val accountStatus: String = "ACTIVE",
   val role: String = "USER",
   val pushNotificationsEnabled: Boolean = true,
@@ -70,8 +73,12 @@ data class UserProfile(
   val cityArea: String = "",
   val photoData: String = "",
   val interests: List<String> = emptyList(),
-  val isVerified: Boolean = false,
-  val isAvailable: Boolean = false,
+  @get:PropertyName("isVerified")
+  @set:PropertyName("isVerified")
+  var isVerified: Boolean = false,
+  @get:PropertyName("isAvailable")
+  @set:PropertyName("isAvailable")
+  var isAvailable: Boolean = false,
   val preferredActivity: String = "",
   val availabilityDurationMinutes: Int = 0,
   val availabilityExpiresAtMillis: Long = 0L,
@@ -231,7 +238,9 @@ data class AppNotification(
   val title: String = "",
   val body: String = "",
   val referenceId: String = "",
-  val isRead: Boolean = false,
+  @get:PropertyName("isRead")
+  @set:PropertyName("isRead")
+  var isRead: Boolean = false,
   @ServerTimestamp val createdAt: Timestamp? = null,
 )
 

@@ -97,7 +97,6 @@ fun ProfileScreen(
   onOpenBlockedUsers: () -> Unit,
   onOpenPrivacy: () -> Unit,
   onOpenTerms: () -> Unit,
-  onOpenAdmin: () -> Unit,
   onSignOut: () -> Unit,
   onDeleteAccount: () -> Unit,
   modifier: Modifier = Modifier,
@@ -113,10 +112,6 @@ fun ProfileScreen(
   var interests by remember(profile.interests) { mutableStateOf(profile.interests.toSet()) }
   var discoveryOptIn by remember(profile.discoveryOptIn) { mutableStateOf(profile.discoveryOptIn) }
   var showDeleteDialog by remember { mutableStateOf(false) }
-
-  val isAdmin =
-    account?.role == "ADMIN" ||
-      userEmail.equals("nikhilkumarsingh2000@gmail.com", ignoreCase = true)
 
   val photoPickerLauncher =
     rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
@@ -263,14 +258,6 @@ fun ProfileScreen(
     ProfileMenuItem(Icons.Rounded.Policy, "Privacy Policy", onClick = onOpenPrivacy)
     ProfileMenuItem(Icons.Rounded.Policy, "Terms & Community Guidelines", onClick = onOpenTerms)
 
-    if (isAdmin) {
-      ProfileMenuItem(
-        icon = Icons.Rounded.AdminPanelSettings,
-        label = "Admin Moderation Console",
-        onClick = onOpenAdmin,
-      )
-    }
-
     OutlinedButton(
       onClick = onSignOut,
       modifier = Modifier.fillMaxWidth().height(48.dp).testTag("sign_out_button"),
@@ -405,6 +392,7 @@ fun SettingsScreen(
   account: UserAccount?,
   onBack: () -> Unit,
   onSavePrefs: (push: Boolean, calls: Boolean, meetups: Boolean) -> Unit,
+  onOpenAdminGate: () -> Unit = {},
 ) {
   var push by remember(account?.pushNotificationsEnabled) { mutableStateOf(account?.pushNotificationsEnabled ?: true) }
   var calls by remember(account?.callAlertsEnabled) { mutableStateOf(account?.callAlertsEnabled ?: true) }
@@ -446,6 +434,16 @@ fun SettingsScreen(
             Switch(checked = meetups, onCheckedChange = { meetups = it; onSavePrefs(push, calls, it) })
           }
         }
+      }
+
+      Spacer(modifier = Modifier.weight(1f))
+      TextButton(
+        onClick = onOpenAdminGate,
+        modifier = Modifier.align(Alignment.CenterHorizontally).testTag("admin_gate_button"),
+      ) {
+        Icon(Icons.Rounded.AdminPanelSettings, contentDescription = null)
+        Spacer(modifier = Modifier.width(6.dp))
+        Text("Admin Console (Restricted)")
       }
     }
   }
@@ -604,6 +602,8 @@ fun LegalInfoScreen(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AdminModerationScreen(
+  currentSignedInEmail: String,
+  isEmailVerified: Boolean,
   snapshot: AdminDashboardSnapshot?,
   isLoading: Boolean,
   onLoad: () -> Unit,
@@ -612,7 +612,16 @@ fun AdminModerationScreen(
   onToggleVerified: (uid: String, verified: Boolean) -> Unit,
   onResolveReport: (reportId: String, status: String) -> Unit,
 ) {
-  LaunchedEffect(Unit) { onLoad() }
+  val authorizedAdminEmail = "nikhilkumarsingh2000@gmail.com"
+  val requiredAccessKey = com.example.BuildConfig.ADMIN_ACCESS_KEY
+  var unlocked by remember { mutableStateOf(false) }
+  var enteredEmail by remember { mutableStateOf("") }
+  var enteredKey by remember { mutableStateOf("") }
+  var gateError by remember { mutableStateOf<String?>(null) }
+
+  LaunchedEffect(unlocked) {
+    if (unlocked) onLoad()
+  }
 
   Scaffold(
     topBar = {
@@ -626,7 +635,74 @@ fun AdminModerationScreen(
       )
     },
   ) { innerPadding ->
-    if (isLoading && snapshot == null) {
+    if (!unlocked) {
+      Column(
+        modifier = Modifier.fillMaxSize().padding(innerPadding).padding(20.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+      ) {
+        Card(
+          colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+          shape = MaterialTheme.shapes.large,
+          modifier = Modifier.fillMaxWidth(),
+        ) {
+          Column(modifier = Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text("Admin Credential Verification", style = MaterialTheme.typography.titleLarge)
+            Text(
+              "Only the single authorized FriendsHub administrator credential can unlock moderation tools.",
+              style = MaterialTheme.typography.bodyMedium,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            OutlinedTextField(
+              value = enteredEmail,
+              onValueChange = { enteredEmail = it; gateError = null },
+              label = { Text("Authorized Admin Email") },
+              singleLine = true,
+              modifier = Modifier.fillMaxWidth().testTag("admin_email_input"),
+            )
+            if (requiredAccessKey.isNotBlank()) {
+              OutlinedTextField(
+                value = enteredKey,
+                onValueChange = { enteredKey = it; gateError = null },
+                label = { Text("Admin Access Key") },
+                singleLine = true,
+                visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                modifier = Modifier.fillMaxWidth().testTag("admin_key_input"),
+              )
+            }
+            if (gateError != null) {
+              Text(
+                text = gateError!!,
+                color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodyMedium,
+              )
+            }
+            Button(
+              onClick = {
+                val signedInMatches =
+                  currentSignedInEmail.equals(authorizedAdminEmail, ignoreCase = true) && isEmailVerified
+                val inputMatches =
+                  enteredEmail.trim().equals(authorizedAdminEmail, ignoreCase = true)
+                val keyMatches =
+                  requiredAccessKey.isBlank() || enteredKey.trim() == requiredAccessKey
+                when {
+                  !signedInMatches ->
+                    gateError = "Access denied: you must be signed in with the single authorized admin Google account."
+                  !inputMatches || !keyMatches ->
+                    gateError = "Invalid admin credential."
+                  else -> {
+                    gateError = null
+                    unlocked = true
+                  }
+                }
+              },
+              modifier = Modifier.fillMaxWidth().height(48.dp).testTag("admin_unlock_button"),
+            ) {
+              Text("Verify & Open Admin Console")
+            }
+          }
+        }
+      }
+    } else if (isLoading && snapshot == null) {
       Column(
         modifier = Modifier.fillMaxSize().padding(innerPadding),
         verticalArrangement = Arrangement.Center,

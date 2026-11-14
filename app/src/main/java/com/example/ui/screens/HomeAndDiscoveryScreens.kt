@@ -106,7 +106,9 @@ fun HomeDashboardScreen(
   activeConnectionsCount: Int,
   upcomingMeetups: List<Meetup>,
   unreadNotifications: Int,
+  isEnablingAvailability: Boolean = false,
   onEnableAvailability: (String, AvailabilityDuration) -> Unit,
+  onUpdateLiveActivity: (String) -> Unit = {},
   onDisableAvailability: () -> Unit,
   onActivityShortcutClick: (String) -> Unit,
   onOpenNotifications: () -> Unit,
@@ -125,14 +127,10 @@ fun HomeDashboardScreen(
   }
 
   val locationPermissionLauncher =
-    rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
-      val granted =
-        result[Manifest.permission.ACCESS_COARSE_LOCATION] == true ||
-          result[Manifest.permission.ACCESS_FINE_LOCATION] == true
-      if (granted) {
-        onEnableAvailability(selectedActivity, selectedDuration)
-        showAvailabilitySetup = false
-      }
+    rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
+      // Even if user chooses not to share GPS, go live using their profile city area
+      onEnableAvailability(selectedActivity, selectedDuration)
+      showAvailabilitySetup = false
     }
 
   val isAvailableNow = myProfile.isCurrentlyAvailable()
@@ -215,6 +213,12 @@ fun HomeDashboardScreen(
                   style = MaterialTheme.typography.bodyMedium,
                   color = MaterialTheme.colorScheme.onPrimaryContainer,
                 )
+              } else if (isEnablingAvailability) {
+                Text(
+                  text = "Going live for $selectedActivity...",
+                  style = MaterialTheme.typography.bodyMedium,
+                  color = MaterialTheme.colorScheme.primary,
+                )
               } else {
                 Text(
                   text = "Switch ON to appear in nearby discovery and share your approximate area.",
@@ -225,13 +229,16 @@ fun HomeDashboardScreen(
             }
             Spacer(modifier = Modifier.width(12.dp))
             Switch(
-              checked = isAvailableNow,
+              checked = isAvailableNow || showAvailabilitySetup || isEnablingAvailability,
+              enabled = !isEnablingAvailability,
               onCheckedChange = { wantOn ->
                 if (wantOn) {
                   showAvailabilitySetup = true
                 } else {
                   showAvailabilitySetup = false
-                  onDisableAvailability()
+                  if (isAvailableNow) {
+                    onDisableAvailability()
+                  }
                 }
               },
               colors =
@@ -241,6 +248,32 @@ fun HomeDashboardScreen(
                 ),
               modifier = Modifier.testTag("availability_toggle"),
             )
+          }
+
+          if (isAvailableNow) {
+            Spacer(modifier = Modifier.height(12.dp))
+            Text(
+              text = "Interested now (tap to switch):",
+              style = MaterialTheme.typography.labelMedium,
+              color = MaterialTheme.colorScheme.onPrimaryContainer,
+            )
+            Spacer(modifier = Modifier.height(6.dp))
+            Row(
+              modifier = Modifier.horizontalScroll(rememberScrollState()),
+              horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+              ActivityCategory.quickActions.forEach { act ->
+                FilterChip(
+                  selected = myProfile.preferredActivity == act.label,
+                  onClick = {
+                    if (myProfile.preferredActivity != act.label) {
+                      onUpdateLiveActivity(act.label)
+                    }
+                  },
+                  label = { Text(act.shortLabel) },
+                )
+              }
+            }
           }
 
           AnimatedVisibility(visible = showAvailabilitySetup && !isAvailableNow) {

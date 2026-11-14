@@ -280,6 +280,18 @@ test("Ordinary user cannot read reports of others or suspend accounts; verified 
 
   await assertFails(bobDb.collection("reports").doc("rep_1").get());
   await assertFails(spoofedAdminDb.collection("reports").doc("rep_1").get());
+
+  // Even a seeded /admins/{uid} document must NOT grant admin access to another user
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await ctx.firestore().collection("admins").doc(BOB_UID).set({ role: "ADMIN" });
+  });
+  const otherVerifiedUserDb = testEnv.authenticatedContext(BOB_UID, {
+    email: "other.admin@example.com",
+    email_verified: true,
+  }).firestore();
+  await assertFails(otherVerifiedUserDb.collection("admins").doc(BOB_UID).get());
+  await assertFails(otherVerifiedUserDb.collection("reports").doc("rep_1").get());
+
   await assertSucceeds(adminDb.collection("reports").doc("rep_1").get());
   await assertSucceeds(adminDb.collection("reports").doc("rep_1").update({ status: "ACTIONED", updatedAt: new Date() }));
 });

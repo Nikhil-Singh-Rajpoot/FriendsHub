@@ -3,12 +3,16 @@ package com.example.ui.auth
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.Context
+import android.content.ContextWrapper
+import android.content.pm.PackageManager
+import android.os.Build
 import android.util.Log
 import androidx.credentials.ClearCredentialStateRequest
 import androidx.credentials.CredentialManager
 import androidx.credentials.CustomCredential
 import androidx.credentials.GetCredentialRequest
 import androidx.credentials.exceptions.GetCredentialCancellationException
+import java.security.MessageDigest
 import com.google.android.libraries.identity.googleid.GetGoogleIdOption
 import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
@@ -77,12 +81,38 @@ object GoogleSignInHelper {
     }
   }
 
+  private fun findActivity(context: Context): Activity? {
+    var current: Context? = context
+    while (current is ContextWrapper) {
+      if (current is Activity) return current
+      current = current.baseContext
+    }
+    return current as? Activity
+  }
+
+  @Suppress("DEPRECATION")
+  fun getAppSha1Fingerprint(context: Context): String? =
+    runCatching {
+      val pm = context.packageManager
+      val pkgName = context.packageName
+      val signature =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+          val info = pm.getPackageInfo(pkgName, PackageManager.GET_SIGNING_CERTIFICATES)
+          info.signingInfo?.apkContentsSigners?.firstOrNull()
+        } else {
+          val info = pm.getPackageInfo(pkgName, PackageManager.GET_SIGNATURES)
+          info.signatures?.firstOrNull()
+        } ?: return null
+      val digest = MessageDigest.getInstance("SHA-1").digest(signature.toByteArray())
+      digest.joinToString(":") { byte -> "%02X".format(byte) }
+    }.getOrNull()
+
   fun startInteractiveSignIn(
     context: Context,
     credentialManager: CredentialManager,
     onAuthSuccess: () -> Unit,
     onAuthError: (String) -> Unit,
-    onAuthCancelled: () -> Unit,
+    onAuthCancelled: (String) -> Unit,
     scope: CoroutineScope,
   ) {
     val clientId = resolveDefaultWebClientId(context)
@@ -91,7 +121,7 @@ object GoogleSignInHelper {
       return
     }
 
-    val activity = context as? Activity
+    val activity = findActivity(context)
     if (activity == null) {
       onAuthError("Sign-in requires an active screen context.")
       return
@@ -113,8 +143,15 @@ object GoogleSignInHelper {
           onAuthError("Unexpected credential type returned.")
         }
       } catch (e: GetCredentialCancellationException) {
-        Log.w(TAG, "Google Sign-In cancelled or dismissed: ${e.message}", e)
-        onAuthCancelled()
+        val sha1 = getAppSha1Fingerprint(context)
+        Log.w(TAG, "Google Sign-In cancelled or blocked (SHA1=$sha1): ${e.message}", e)
+        val hint =
+          if (sha1 != null) {
+            "Sign-in was cancelled. If you chose a Google account and the popup closed, add this app's SHA-1 fingerprint to Firebase Console -> Project Settings -> Your apps (${context.packageName}):\n$sha1"
+          } else {
+            "Sign-in was cancelled. Please select your Google account again or verify your app's SHA-1 in Firebase Console."
+          }
+        onAuthCancelled(hint)
       } catch (e: Exception) {
         Log.e(TAG, "Google Sign-In failed", e)
         onAuthError(e.localizedMessage ?: "Google Sign-In failed")

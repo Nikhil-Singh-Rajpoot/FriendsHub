@@ -27,13 +27,11 @@ service cloud.firestore {
     }
 
     function isAdmin() {
-      return isSignedIn() && (
-        exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
-        ('email' in request.auth.token &&
-         request.auth.token.email == 'nikhilkumarsingh2000@gmail.com' &&
-         'email_verified' in request.auth.token &&
-         request.auth.token.email_verified == true)
-      );
+      return isSignedIn() &&
+             'email' in request.auth.token &&
+             request.auth.token.email == 'nikhilkumarsingh2000@gmail.com' &&
+             'email_verified' in request.auth.token &&
+             request.auth.token.email_verified == true;
     }
 
     function isValidTimestamp(ts) {
@@ -227,8 +225,7 @@ service cloud.firestore {
     // Collection Rules
     // -------------------------------------------------------------------------
     match /admins/{adminUid} {
-      allow get: if isSignedIn() && isValidId(adminUid) && (request.auth.uid == adminUid || isAdmin());
-      allow list, create, update, delete: if false;
+      allow read, write: if false;
     }
 
     match /users/{userId} {

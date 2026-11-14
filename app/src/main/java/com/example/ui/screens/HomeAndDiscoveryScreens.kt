@@ -106,6 +106,7 @@ fun HomeDashboardScreen(
   activeConnectionsCount: Int,
   upcomingMeetups: List<Meetup>,
   unreadNotifications: Int,
+  radiusFilter: RadiusFilter = RadiusFilter.KM_5,
   isEnablingAvailability: Boolean = false,
   onEnableAvailability: (String, AvailabilityDuration) -> Unit,
   onUpdateLiveActivity: (String) -> Unit = {},
@@ -435,7 +436,19 @@ fun HomeDashboardScreen(
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
       ) {
-        Text("Available nearby", style = MaterialTheme.typography.titleLarge)
+        Column(modifier = Modifier.weight(1f)) {
+          Text("Available nearby", style = MaterialTheme.typography.titleLarge)
+          val scopeSubtitle =
+            listOfNotNull(
+              "Within ${radiusFilter.label}",
+              myProfile.cityArea.takeIf { it.isNotBlank() },
+            ).joinToString(" • ")
+          Text(
+            text = scopeSubtitle,
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
+        }
         TextButton(onClick = onOpenDiscovery) { Text("See all") }
       }
     }

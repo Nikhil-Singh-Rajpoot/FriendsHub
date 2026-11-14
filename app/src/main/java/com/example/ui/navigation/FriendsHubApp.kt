@@ -269,6 +269,7 @@ private fun AuthenticatedAppShell(
   val callNote by viewModel.callConnectionNote.collectAsStateWithLifecycle()
   val statusMessage by viewModel.statusMessage.collectAsStateWithLifecycle()
   val callBlockedNotice by viewModel.callBlockedNotice.collectAsStateWithLifecycle()
+  val viewerLocation by viewModel.viewerLocation.collectAsStateWithLifecycle()
   val adminSnapshot by viewModel.adminSnapshot.collectAsStateWithLifecycle()
   val adminLoading by viewModel.adminLoading.collectAsStateWithLifecycle()
 
@@ -359,6 +360,10 @@ private fun AuthenticatedAppShell(
   var activeSubScreen by remember { mutableStateOf<SubScreen?>(null) }
   var quickConnectTarget by remember { mutableStateOf<UserProfile?>(null) }
 
+  LaunchedEffect(myProfile.uid) {
+    viewModel.refreshViewerLocation(context)
+  }
+
   if (activeSubScreen != null) {
     BackHandler { activeSubScreen = null }
   }
@@ -372,15 +377,22 @@ private fun AuthenticatedAppShell(
   when (val sub = activeSubScreen) {
     is SubScreen.ProfileDetails -> {
       val liveProfile = availableProfiles.firstOrNull { it.uid == sub.profile.uid } ?: sub.profile
+      val effectiveLat = viewerLocation?.first ?: myProfile.approxLat
+      val effectiveLng = viewerLocation?.second ?: myProfile.approxLng
       val distKm = LocationPrivacy.distanceKm(
-        myProfile.approxLat,
-        myProfile.approxLng,
+        effectiveLat,
+        effectiveLng,
         liveProfile.approxLat,
         liveProfile.approxLng,
       )
       val distLabel =
-        if (myProfile.approxLat == 0.0) liveProfile.cityArea
-        else LocationPrivacy.formatApproxDistance(distKm)
+        if (effectiveLat == 0.0 && effectiveLng == 0.0 ||
+          (liveProfile.approxLat == 0.0 && liveProfile.approxLng == 0.0)
+        ) {
+          liveProfile.cityArea
+        } else {
+          LocationPrivacy.formatApproxDistance(distKm)
+        }
       val common = liveProfile.interests.filter { it in myProfile.interests }
 
       UserProfileDetailsScreen(
@@ -571,6 +583,7 @@ private fun AuthenticatedAppShell(
                   activeConnectionsCount = activeConnectionsCount,
                   upcomingMeetups = upcomingMeetups,
                   unreadNotifications = unreadNotifications,
+                  radiusFilter = radiusFilter,
                   isEnablingAvailability = isEnablingAvailability,
                   onEnableAvailability = { act, dur -> viewModel.turnOnAvailability(context, act, dur) },
                   onUpdateLiveActivity = { act -> viewModel.updateLiveActivity(act) },

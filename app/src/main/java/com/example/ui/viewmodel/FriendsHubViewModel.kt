@@ -61,6 +61,9 @@ class FriendsHubViewModel(
   private val _callBlockedNotice = MutableStateFlow<String?>(null)
   val callBlockedNotice: StateFlow<String?> = _callBlockedNotice.asStateFlow()
 
+  private val _viewerLocation = MutableStateFlow<Pair<Double, Double>?>(null)
+  val viewerLocation: StateFlow<Pair<Double, Double>?> = _viewerLocation.asStateFlow()
+
   // Live Account & Profile
   val accountState: StateFlow<UiState<UserAccount?>> =
     repository.observeAccount(currentUserId)
@@ -127,7 +130,7 @@ class FriendsHubViewModel(
       .catch { emit(emptyList()) }
       .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), emptyList())
 
-  // Filtered Nearby Discovery cards
+  // Filtered Nearby Discovery cards (strictly local to user's GPS radius or matching city/area)
   val nearbyUsers: StateFlow<List<NearbyUserCardModel>> =
     combine(
       myProfileState,
@@ -136,7 +139,9 @@ class FriendsHubViewModel(
       blockedByOthers,
       _radiusFilter,
       _activityFilter,
+      _viewerLocation,
     ) { values ->
+      @Suppress("UNCHECKED_CAST")
       val myProfileStateVal = values[0] as UiState<UserProfile?>
       @Suppress("UNCHECKED_CAST")
       val candidates = values[1] as List<UserProfile>
@@ -146,43 +151,21 @@ class FriendsHubViewModel(
       val blockedMe = values[3] as List<BlockedUser>
       val radius = values[4] as RadiusFilter
       val activity = values[5] as String?
+      @Suppress("UNCHECKED_CAST")
+      val viewerCoords = values[6] as Pair<Double, Double>?
 
       val me = (myProfileStateVal as? UiState.Success)?.data
       val blockedUids = (myBlocks.map { it.blockedUid } + blockedMe.map { it.blockerUid }).toSet()
-      val myLat = me?.approxLat ?: 0.0
-      val myLng = me?.approxLng ?: 0.0
-      val myInterests = me?.interests?.toSet().orEmpty()
 
-      candidates
-        .asSequence()
-        .filter { it.uid !in blockedUids }
-        .filter { profile ->
-          activity.isNullOrBlank() ||
-            profile.preferredActivity.contains(activity, ignoreCase = true) ||
-            (profile.preferredActivity.isBlank() &&
-              profile.interests.any { it.contains(activity, ignoreCase = true) })
-        }
-        .map { profile ->
-          val distKm = LocationPrivacy.distanceKm(myLat, myLng, profile.approxLat, profile.approxLng)
-          val common = profile.interests.filter { it in myInterests }
-          NearbyUserCardModel(
-            profile = profile,
-            distanceKm = distKm,
-            distanceLabel =
-              if (myLat == 0.0 && myLng == 0.0) {
-                profile.cityArea.ifBlank { "Nearby" }
-              } else {
-                LocationPrivacy.formatApproxDistance(distKm)
-              },
-            commonInterests = common,
-          )
-        }
-        .filter { card ->
-          // If the user has not shared GPS yet, still allow city-level discovery; once GPS is shared, enforce radius
-          (myLat == 0.0 && myLng == 0.0) || card.distanceKm <= radius.km.toDouble()
-        }
-        .sortedBy { it.distanceKm }
-        .toList()
+      LocationPrivacy.buildNearbyUserCards(
+        myProfile = me,
+        viewerLat = viewerCoords?.first ?: 0.0,
+        viewerLng = viewerCoords?.second ?: 0.0,
+        candidates = candidates,
+        blockedUids = blockedUids,
+        radius = radius,
+        activityFilter = activity,
+      )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), emptyList())
 
   // Active / Ringing Call state
@@ -344,6 +327,17 @@ class FriendsHubViewModel(
   // ---------------------------------------------------------------------------
   // Availability & Coarse Location
   // ---------------------------------------------------------------------------
+  fun refreshViewerLocation(context: Context) {
+    viewModelScope.launch {
+      val fetched = withTimeoutOrNull(5000L) {
+        LocationPrivacy.fetchCoarseDeviceLocation(context)
+      }
+      if (fetched != null) {
+        _viewerLocation.value = fetched
+      }
+    }
+  }
+
   fun turnOnAvailability(
     context: Context,
     activity: String,
@@ -355,9 +349,12 @@ class FriendsHubViewModel(
         val fetchedCoords = withTimeoutOrNull(5000L) {
           LocationPrivacy.fetchCoarseDeviceLocation(context)
         }
+        if (fetchedCoords != null) {
+          _viewerLocation.value = fetchedCoords
+        }
         val currentProfile = (myProfileState.value as? UiState.Success)?.data
-        val fallbackLat = currentProfile?.approxLat ?: 0.0
-        val fallbackLng = currentProfile?.approxLng ?: 0.0
+        val fallbackLat = _viewerLocation.value?.first ?: currentProfile?.approxLat ?: 0.0
+        val fallbackLng = _viewerLocation.value?.second ?: currentProfile?.approxLng ?: 0.0
         val coords = fetchedCoords ?: (fallbackLat to fallbackLng)
         repository.startAvailability(activity, duration.minutes, coords.first, coords.second)
           .onSuccess {

@@ -108,6 +108,154 @@ object LocationPrivacy {
     }
   }
 
+  private val cityAliases =
+    mapOf(
+      "gurgaon" to "gurugram",
+      "bangalore" to "bengaluru",
+      "bombay" to "mumbai",
+      "calcutta" to "kolkata",
+      "madras" to "chennai",
+      "poona" to "pune",
+      "trivandrum" to "thiruvananthapuram",
+      "cochin" to "kochi",
+      "new delhi" to "delhi",
+    )
+
+  private val genericAreaWords =
+    setOf(
+      "sector",
+      "phase",
+      "block",
+      "pocket",
+      "road",
+      "marg",
+      "street",
+      "lane",
+      "nagar",
+      "colony",
+      "enclave",
+      "vihar",
+      "extension",
+      "ext",
+      "area",
+      "near",
+      "city",
+      "district",
+      "india",
+      "sec",
+    )
+
+  private fun normalizeCityAlias(value: String): String {
+    val trimmed = value.trim().lowercase(Locale.US)
+    return cityAliases[trimmed] ?: trimmed
+  }
+
+  /**
+   * Checks whether two "Neighborhood, City" strings refer to the same local city/area.
+   * Ensures e.g. "Sector 22, Gurugram" matches "Sector 29, Gurugram" / "Sector 22, Gurgaon",
+   * while rejecting "Sector 22, Noida" or "Andheri, Mumbai".
+   */
+  fun isSameCityOrArea(myCityArea: String, otherCityArea: String): Boolean {
+    val aParts = myCityArea.split(",").map { normalizeCityAlias(it) }.filter { it.isNotBlank() }
+    val bParts = otherCityArea.split(",").map { normalizeCityAlias(it) }.filter { it.isNotBlank() }
+    if (aParts.isEmpty() || bParts.isEmpty()) return false
+
+    fun tokensFrom(parts: List<String>): Set<String> {
+      return parts
+        .flatMap { part -> part.split(Regex("[^a-z0-9]+")) }
+        .map { normalizeCityAlias(it) }
+        .filter { token ->
+          token.length >= 3 &&
+            token !in genericAreaWords &&
+            !token.all { it.isDigit() }
+        }
+        .toSet()
+    }
+
+    val aEffectiveParts = if (aParts.size >= 3) aParts.take(2) else aParts
+    val bEffectiveParts = if (bParts.size >= 3) bParts.take(2) else bParts
+
+    if (aEffectiveParts.size >= 2 && bEffectiveParts.size >= 2) {
+      if (aEffectiveParts[1] == bEffectiveParts[1]) return true
+    }
+
+    val aTokens = tokensFrom(aEffectiveParts)
+    val bTokens = tokensFrom(bEffectiveParts)
+    if (aTokens.isNotEmpty() && bTokens.isNotEmpty()) {
+      return (aTokens intersect bTokens).isNotEmpty()
+    }
+
+    return aEffectiveParts.first() == bEffectiveParts.first()
+  }
+
+  /**
+   * Filters available candidates to ONLY users genuinely nearby the current user:
+   * - If both users have coordinates, enforces Haversine distance <= radiusFilter.km.
+   * - If either user lacks coordinates (e.g. viewer has availability OFF and no GPS permission),
+   *   requires matching city/area instead of showing distant users.
+   */
+  fun buildNearbyUserCards(
+    myProfile: com.example.data.model.UserProfile?,
+    viewerLat: Double,
+    viewerLng: Double,
+    candidates: List<com.example.data.model.UserProfile>,
+    blockedUids: Set<String>,
+    radius: com.example.data.model.RadiusFilter,
+    activityFilter: String?,
+  ): List<com.example.data.model.NearbyUserCardModel> {
+    val effectiveLat = if (viewerLat != 0.0 || viewerLng != 0.0) viewerLat else (myProfile?.approxLat ?: 0.0)
+    val effectiveLng = if (viewerLat != 0.0 || viewerLng != 0.0) viewerLng else (myProfile?.approxLng ?: 0.0)
+    val viewerHasCoords = effectiveLat != 0.0 || effectiveLng != 0.0
+    val myCityArea = myProfile?.cityArea.orEmpty()
+    val myInterests = myProfile?.interests?.toSet().orEmpty()
+
+    return candidates
+      .asSequence()
+      .filter { it.uid !in blockedUids }
+      .filter { profile ->
+        activityFilter.isNullOrBlank() ||
+          profile.preferredActivity.contains(activityFilter, ignoreCase = true) ||
+          (profile.preferredActivity.isBlank() &&
+            profile.interests.any { it.contains(activityFilter, ignoreCase = true) })
+      }
+      .mapNotNull { profile ->
+        val peerHasCoords = profile.approxLat != 0.0 || profile.approxLng != 0.0
+        val sameCity = isSameCityOrArea(myCityArea, profile.cityArea)
+        val distKm =
+          if (viewerHasCoords && peerHasCoords) {
+            distanceKm(effectiveLat, effectiveLng, profile.approxLat, profile.approxLng)
+          } else {
+            999.0
+          }
+
+        val isNearby =
+          if (viewerHasCoords && peerHasCoords) {
+            distKm <= radius.km.toDouble()
+          } else {
+            sameCity
+          }
+
+        if (!isNearby) return@mapNotNull null
+
+        val common = profile.interests.filter { it in myInterests }
+        val label =
+          if (viewerHasCoords && peerHasCoords) {
+            formatApproxDistance(distKm)
+          } else {
+            profile.cityArea.ifBlank { "Same area" }
+          }
+
+        com.example.data.model.NearbyUserCardModel(
+          profile = profile,
+          distanceKm = if (viewerHasCoords && peerHasCoords) distKm else 0.5,
+          distanceLabel = label,
+          commonInterests = common,
+        )
+      }
+      .sortedBy { it.distanceKm }
+      .toList()
+  }
+
   data class DetectedLocationAddress(
     val cityArea: String,
     val approxLat: Double,

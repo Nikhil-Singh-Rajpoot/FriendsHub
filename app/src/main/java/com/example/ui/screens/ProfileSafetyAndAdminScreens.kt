@@ -27,6 +27,7 @@ import androidx.compose.material.icons.rounded.AdminPanelSettings
 import androidx.compose.material.icons.rounded.Block
 import androidx.compose.material.icons.rounded.DeleteForever
 import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.material.icons.rounded.MyLocation
 import androidx.compose.material.icons.rounded.Notifications
 import androidx.compose.material.icons.rounded.Policy
 import androidx.compose.material.icons.rounded.Settings
@@ -74,8 +75,11 @@ import com.example.ui.theme.CoralAlert
 import com.example.ui.theme.CoralContainer
 import com.example.ui.theme.EmeraldContainer
 import com.example.ui.theme.EmeraldOnline
+import androidx.compose.foundation.layout.size
 import com.example.util.ImageUtils
+import com.example.util.LocationPrivacy
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -111,6 +115,7 @@ fun ProfileScreen(
   var photoData by remember(profile.photoData) { mutableStateOf(profile.photoData) }
   var interests by remember(profile.interests) { mutableStateOf(profile.interests.toSet()) }
   var discoveryOptIn by remember(profile.discoveryOptIn) { mutableStateOf(profile.discoveryOptIn) }
+  var isDetectingLocation by remember { mutableStateOf(false) }
   var showDeleteDialog by remember { mutableStateOf(false) }
 
   val photoPickerLauncher =
@@ -118,6 +123,28 @@ fun ProfileScreen(
       if (uri != null) {
         scope.launch {
           ImageUtils.encodePickerUriToDataString(context, uri)?.let { photoData = it }
+        }
+      }
+    }
+
+  val locationPermissionLauncher =
+    rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
+      val granted =
+        result[android.Manifest.permission.ACCESS_COARSE_LOCATION] == true ||
+          result[android.Manifest.permission.ACCESS_FINE_LOCATION] == true
+      if (granted) {
+        scope.launch {
+          isDetectingLocation = true
+          try {
+            val detected = withTimeoutOrNull(8000L) {
+              LocationPrivacy.detectCityAreaFromDeviceLocation(context)
+            }
+            if (detected != null && detected.cityArea.isNotBlank()) {
+              cityArea = detected.cityArea
+            }
+          } finally {
+            isDetectingLocation = false
+          }
         }
       }
     }
@@ -205,6 +232,51 @@ fun ProfileScreen(
             onValueChange = { cityArea = it },
             label = { Text("City / Area") },
             singleLine = true,
+            trailingIcon = {
+              IconButton(
+                enabled = !isDetectingLocation,
+                onClick = {
+                  val hasCoarse =
+                    androidx.core.content.ContextCompat.checkSelfPermission(
+                      context,
+                      android.Manifest.permission.ACCESS_COARSE_LOCATION,
+                    ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+                  val hasFine =
+                    androidx.core.content.ContextCompat.checkSelfPermission(
+                      context,
+                      android.Manifest.permission.ACCESS_FINE_LOCATION,
+                    ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+                  if (hasCoarse || hasFine) {
+                    scope.launch {
+                      isDetectingLocation = true
+                      try {
+                        val detected = withTimeoutOrNull(8000L) {
+                          LocationPrivacy.detectCityAreaFromDeviceLocation(context)
+                        }
+                        if (detected != null && detected.cityArea.isNotBlank()) {
+                          cityArea = detected.cityArea
+                        }
+                      } finally {
+                        isDetectingLocation = false
+                      }
+                    }
+                  } else {
+                    locationPermissionLauncher.launch(
+                      arrayOf(
+                        android.Manifest.permission.ACCESS_COARSE_LOCATION,
+                        android.Manifest.permission.ACCESS_FINE_LOCATION,
+                      )
+                    )
+                  }
+                },
+              ) {
+                if (isDetectingLocation) {
+                  CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                } else {
+                  Icon(Icons.Rounded.MyLocation, contentDescription = "Use live location")
+                }
+              }
+            },
             modifier = Modifier.fillMaxWidth(),
           )
           OutlinedTextField(

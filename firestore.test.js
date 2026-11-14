@@ -199,22 +199,27 @@ test("Calls and meetups require active connection and participant membership", a
     })
   );
 
-  await assertSucceeds(
-    aliceDb.collection("calls").doc("call_1").set({
-      connectionId: "conn_1",
-      callerUid: ALICE_UID,
-      calleeUid: BOB_UID,
-      callerName: "Alice",
-      calleeName: "Bob",
-      participantUids: [ALICE_UID, BOB_UID],
-      status: "RINGING",
-      durationSeconds: 0,
-      startedAtMillis: 0,
-      endedAtMillis: 0,
-      createdAt: now,
-      updatedAt: now,
-    })
-  );
+  // Calling Bob while Bob has availability OFF must fail
+  await bobDb.collection("user_profiles").doc(BOB_UID).set(validUserProfile(BOB_UID, { isAvailable: false }));
+  const callPayload = {
+    connectionId: "conn_1",
+    callerUid: ALICE_UID,
+    calleeUid: BOB_UID,
+    callerName: "Alice",
+    calleeName: "Bob",
+    participantUids: [ALICE_UID, BOB_UID],
+    status: "RINGING",
+    durationSeconds: 0,
+    startedAtMillis: 0,
+    endedAtMillis: 0,
+    createdAt: now,
+    updatedAt: now,
+  };
+  await assertFails(aliceDb.collection("calls").doc("call_1").set(callPayload));
+
+  // Once Bob turns availability ON, Alice can place the call
+  await bobDb.collection("user_profiles").doc(BOB_UID).update({ isAvailable: true, updatedAt: new Date() });
+  await assertSucceeds(aliceDb.collection("calls").doc("call_1").set(callPayload));
 
   // Outsider Charlie cannot read or update the call
   await assertFails(charlieDb.collection("calls").doc("call_1").get());

@@ -268,6 +268,7 @@ private fun AuthenticatedAppShell(
   val callDuration by viewModel.callDurationSeconds.collectAsStateWithLifecycle()
   val callNote by viewModel.callConnectionNote.collectAsStateWithLifecycle()
   val statusMessage by viewModel.statusMessage.collectAsStateWithLifecycle()
+  val callBlockedNotice by viewModel.callBlockedNotice.collectAsStateWithLifecycle()
   val adminSnapshot by viewModel.adminSnapshot.collectAsStateWithLifecycle()
   val adminLoading by viewModel.adminLoading.collectAsStateWithLifecycle()
 
@@ -314,7 +315,7 @@ private fun AuthenticatedAppShell(
     OnboardingFlowScreen(
       defaultName = userDisplayName,
       userEmail = userEmail,
-      onCompleteOnboarding = { displayName, phoneNote, dobMillis, gender, bio, cityArea, photoData, interests ->
+      onCompleteOnboarding = { displayName, phoneNote, dobMillis, gender, bio, cityArea, photoData, interests, approxLat, approxLng ->
         viewModel.completeOnboarding(
           displayName = displayName,
           email = userEmail,
@@ -325,6 +326,8 @@ private fun AuthenticatedAppShell(
           cityArea = cityArea,
           photoData = photoData,
           interests = interests,
+          approxLat = approxLat,
+          approxLng = approxLng,
           onDone = {},
         )
       },
@@ -604,6 +607,7 @@ private fun AuthenticatedAppShell(
                   requests = requests,
                   connections = connections,
                   meetups = meetups,
+                  availableUserIds = availableProfiles.filter { it.isCurrentlyAvailable() }.map { it.uid }.toSet(),
                   onAcceptRequest = { viewModel.respondToRequest(it, accept = true) },
                   onRejectRequest = { viewModel.respondToRequest(it, accept = false) },
                   onCallConnection = { viewModel.startOutgoingCall(context, it) },
@@ -661,6 +665,22 @@ private fun AuthenticatedAppShell(
       onSend = { activity, msg ->
         quickConnectTarget = null
         viewModel.sendConnectionRequest(target, activity, msg)
+      },
+    )
+  }
+
+  callBlockedNotice?.let { notice ->
+    androidx.compose.material3.AlertDialog(
+      onDismissRequest = { viewModel.dismissCallBlockedNotice() },
+      title = { Text("User Not Online") },
+      text = { Text(notice) },
+      confirmButton = {
+        androidx.compose.material3.TextButton(
+          onClick = { viewModel.dismissCallBlockedNotice() },
+          modifier = Modifier.testTag("dismiss_call_offline_dialog"),
+        ) {
+          Text("OK")
+        }
       },
     )
   }

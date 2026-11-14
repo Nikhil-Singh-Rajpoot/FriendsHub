@@ -36,6 +36,7 @@ import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Coffee
 import androidx.compose.material.icons.rounded.LocationOn
 import androidx.compose.material.icons.rounded.Lock
+import androidx.compose.material.icons.rounded.MyLocation
 import androidx.compose.material.icons.rounded.PhoneInTalk
 import androidx.compose.material.icons.rounded.VerifiedUser
 import androidx.compose.material3.Button
@@ -59,7 +60,9 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableDoubleStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -94,6 +97,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 @Composable
 fun AuthWelcomeScreen(
@@ -320,11 +324,27 @@ fun OnboardingFlowScreen(
     cityArea: String,
     photoData: String,
     interests: List<String>,
+    approxLat: Double,
+    approxLng: Double,
   ) -> Unit,
   onSignOut: () -> Unit,
 ) {
   val context = LocalContext.current
   val scope = rememberCoroutineScope()
+
+  fun checkHasLocationPerm(): Boolean {
+    val coarse =
+      androidx.core.content.ContextCompat.checkSelfPermission(
+        context,
+        Manifest.permission.ACCESS_COARSE_LOCATION,
+      ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+    val fine =
+      androidx.core.content.ContextCompat.checkSelfPermission(
+        context,
+        Manifest.permission.ACCESS_FINE_LOCATION,
+      ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+    return coarse || fine
+  }
 
   var step by remember { mutableIntStateOf(0) }
   var fullName by remember { mutableStateOf(defaultName) }
@@ -332,12 +352,46 @@ fun OnboardingFlowScreen(
   var dobMillis by remember { mutableLongStateOf(0L) }
   var showDatePicker by remember { mutableStateOf(false) }
   var gender by remember { mutableStateOf("") }
-  var cityArea by remember { mutableStateOf("Sector 29, Gurugram") }
+  var cityArea by remember { mutableStateOf("") }
+  var userEditedCity by remember { mutableStateOf(false) }
+  var isDetectingLocation by remember { mutableStateOf(false) }
+  var locationHint by remember { mutableStateOf<String?>(null) }
+  var detectedLat by remember { mutableDoubleStateOf(0.0) }
+  var detectedLng by remember { mutableDoubleStateOf(0.0) }
   var bio by remember { mutableStateOf("") }
   var photoData by remember { mutableStateOf("") }
   var selectedInterests by remember { mutableStateOf(setOf(ActivityCategory.TEA_COFFEE.label)) }
-  var locationGranted by remember { mutableStateOf(false) }
+  var locationGranted by remember { mutableStateOf(checkHasLocationPerm()) }
+  var pendingForceDetect by remember { mutableStateOf(false) }
+  var autoPromptedLocation by remember { mutableStateOf(false) }
   var errorText by remember { mutableStateOf<String?>(null) }
+
+  suspend fun detectAndFillLocation(forceOverwrite: Boolean) {
+    isDetectingLocation = true
+    locationHint = "Detecting your city / area from mobile location..."
+    try {
+      val detected = withTimeoutOrNull(8000L) {
+        LocationPrivacy.detectCityAreaFromDeviceLocation(context)
+      }
+      if (detected != null) {
+        detectedLat = detected.approxLat
+        detectedLng = detected.approxLng
+        if (detected.cityArea.isNotBlank()) {
+          if (forceOverwrite || !userEditedCity || cityArea.isBlank()) {
+            cityArea = detected.cityArea
+            userEditedCity = false
+          }
+          locationHint = "Auto-filled from your mobile location. You can edit it anytime."
+        } else {
+          locationHint = "GPS coordinates ready. Please type your city or neighborhood."
+        }
+      } else {
+        locationHint = "Could not detect GPS location right now. You can type your city or tap Use Current Location."
+      }
+    } finally {
+      isDetectingLocation = false
+    }
+  }
 
   val photoPickerLauncher =
     rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
@@ -355,10 +409,33 @@ fun OnboardingFlowScreen(
 
   val locationPermissionLauncher =
     rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
-      locationGranted =
+      val granted =
         result[Manifest.permission.ACCESS_COARSE_LOCATION] == true ||
           result[Manifest.permission.ACCESS_FINE_LOCATION] == true
+      locationGranted = granted
+      val force = pendingForceDetect
+      pendingForceDetect = false
+      if (granted) {
+        scope.launch { detectAndFillLocation(forceOverwrite = force) }
+      } else {
+        locationHint = "Location permission denied. Enter your city / neighborhood manually."
+      }
     }
+
+  LaunchedEffect(Unit) {
+    if (checkHasLocationPerm()) {
+      locationGranted = true
+      detectAndFillLocation(forceOverwrite = false)
+    } else if (!autoPromptedLocation) {
+      autoPromptedLocation = true
+      locationPermissionLauncher.launch(
+        arrayOf(
+          Manifest.permission.ACCESS_COARSE_LOCATION,
+          Manifest.permission.ACCESS_FINE_LOCATION,
+        )
+      )
+    }
+  }
 
   val datePickerState = rememberDatePickerState()
   if (showDatePicker) {
@@ -460,12 +537,72 @@ fun OnboardingFlowScreen(
 
         OutlinedTextField(
           value = cityArea,
-          onValueChange = { cityArea = it },
-          label = { Text("City / Neighborhood (e.g. Sector 29, Gurugram)") },
+          onValueChange = {
+            cityArea = it
+            userEditedCity = true
+          },
+          label = { Text("City / Neighborhood") },
+          placeholder = { Text("Auto-filled from GPS or enter manually") },
           singleLine = true,
+          trailingIcon = {
+            IconButton(
+              enabled = !isDetectingLocation,
+              onClick = {
+                if (checkHasLocationPerm()) {
+                  scope.launch { detectAndFillLocation(forceOverwrite = true) }
+                } else {
+                  pendingForceDetect = true
+                  locationPermissionLauncher.launch(
+                    arrayOf(
+                      Manifest.permission.ACCESS_COARSE_LOCATION,
+                      Manifest.permission.ACCESS_FINE_LOCATION,
+                    )
+                  )
+                }
+              },
+              modifier = Modifier.testTag("onboarding_detect_location_icon"),
+            ) {
+              if (isDetectingLocation) {
+                CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+              } else {
+                Icon(Icons.Rounded.MyLocation, contentDescription = "Use current mobile location")
+              }
+            }
+          },
           modifier = Modifier.fillMaxWidth().testTag("onboarding_city_input"),
         )
-        Spacer(modifier = Modifier.height(12.dp))
+        Row(
+          modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+          horizontalArrangement = Arrangement.SpaceBetween,
+          verticalAlignment = Alignment.CenterVertically,
+        ) {
+          Text(
+            text = locationHint ?: "Tap the location icon to fill your address from GPS.",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f),
+          )
+          TextButton(
+            enabled = !isDetectingLocation,
+            onClick = {
+              if (checkHasLocationPerm()) {
+                scope.launch { detectAndFillLocation(forceOverwrite = true) }
+              } else {
+                pendingForceDetect = true
+                locationPermissionLauncher.launch(
+                  arrayOf(
+                    Manifest.permission.ACCESS_COARSE_LOCATION,
+                    Manifest.permission.ACCESS_FINE_LOCATION,
+                  )
+                )
+              }
+            },
+            modifier = Modifier.testTag("onboarding_use_location_button"),
+          ) {
+            Text(if (isDetectingLocation) "Locating..." else "Use Live Location")
+          }
+        }
+        Spacer(modifier = Modifier.height(8.dp))
 
         OutlinedTextField(
           value = phoneNote,
@@ -672,6 +809,8 @@ fun OnboardingFlowScreen(
               cityArea.trim(),
               photoData,
               selectedInterests.toList(),
+              detectedLat,
+              detectedLng,
             )
           }
         }

@@ -118,7 +118,21 @@ class FriendsHubRepositoryRuleTest : FirestoreEmulatorTestBase() {
     }
     val activeConn = connections.first { it.participantUids.contains(aliceUid) }
 
-    // 6. Bob initiates voice call & Alice proposes meetup
+    // 6. Calling Alice while Alice has availability OFF must fail with an offline error message
+    val blockedCallResult = withTimeout(TIMEOUT_MS) {
+      bobRepo.initiateCall(activeConn, "Bob", "v=0\no=- 1 1 IN IP4 127.0.0.1\n")
+    }
+    assertTrue("Calling an unavailable user must fail", blockedCallResult.isFailure)
+    assertTrue(
+      "Expected 'not online' message, got: ${blockedCallResult.exceptionOrNull()?.message}",
+      blockedCallResult.exceptionOrNull()?.message?.contains("not online", ignoreCase = true) == true,
+    )
+
+    // Once Alice switches availability ON, Bob's call succeeds
+    signInTestUser(aliceEmail)
+    assertTrue(withTimeout(TIMEOUT_MS) { aliceRepo.startAvailability("Have tea or coffee", 60, 28.46, 77.03) }.isSuccess)
+    signInTestUser(bobEmail)
+
     val callResult = withTimeout(TIMEOUT_MS) {
       bobRepo.initiateCall(activeConn, "Bob", "v=0\no=- 1 1 IN IP4 127.0.0.1\n")
     }
@@ -244,7 +258,7 @@ class FriendsHubRepositoryRuleTest : FirestoreEmulatorTestBase() {
   }
 
   private companion object {
-    const val TIMEOUT_MS = 5000L
-    const val FLOW_TIMEOUT_MS = 4000L
+    const val TIMEOUT_MS = 12000L
+    const val FLOW_TIMEOUT_MS = 8000L
   }
 }

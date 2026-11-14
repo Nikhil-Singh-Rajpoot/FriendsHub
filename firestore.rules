@@ -437,7 +437,10 @@ service cloud.firestore {
                        isValidCall(incoming()) &&
                        exists(/databases/$(database)/documents/connections/$(incoming().connectionId)) &&
                        get(/databases/$(database)/documents/connections/$(incoming().connectionId)).data.status == 'ACTIVE' &&
-                       request.auth.uid in get(/databases/$(database)/documents/connections/$(incoming().connectionId)).data.participantUids;
+                       request.auth.uid in get(/databases/$(database)/documents/connections/$(incoming().connectionId)).data.participantUids &&
+                       exists(/databases/$(database)/documents/user_profiles/$(incoming().calleeUid)) &&
+                       get(/databases/$(database)/documents/user_profiles/$(incoming().calleeUid)).data.isAvailable == true &&
+                       get(/databases/$(database)/documents/user_profiles/$(incoming().calleeUid)).data.accountStatus == 'ACTIVE';
 
       allow update: if isSignedIn() &&
                        isValidId(callId) &&

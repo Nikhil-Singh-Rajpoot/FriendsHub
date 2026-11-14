@@ -58,6 +58,9 @@ class FriendsHubViewModel(
   private val _isEnablingAvailability = MutableStateFlow(false)
   val isEnablingAvailability: StateFlow<Boolean> = _isEnablingAvailability.asStateFlow()
 
+  private val _callBlockedNotice = MutableStateFlow<String?>(null)
+  val callBlockedNotice: StateFlow<String?> = _callBlockedNotice.asStateFlow()
+
   // Live Account & Profile
   val accountState: StateFlow<UiState<UserAccount?>> =
     repository.observeAccount(currentUserId)
@@ -185,11 +188,16 @@ class FriendsHubViewModel(
   // Active / Ringing Call state
   private val _activeCallId = MutableStateFlow<String?>(null)
   val activeCall: StateFlow<VoiceCall?> =
-    combine(calls, _activeCallId) { callList, activeId ->
+    combine(calls, myProfileState, _activeCallId) { callList, profileState, activeId ->
+      val myProfile = (profileState as? UiState.Success)?.data
+      val amAvailable = myProfile?.isCurrentlyAvailable() == true
       if (activeId != null) {
         callList.firstOrNull { it.id == activeId }
       } else {
-        callList.firstOrNull { it.status == "RINGING" || it.status == "ACTIVE" }
+        callList.firstOrNull { call ->
+          call.status == "ACTIVE" ||
+            (call.status == "RINGING" && (call.callerUid == currentUserId || amAvailable))
+        }
       }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), null)
 
@@ -230,10 +238,29 @@ class FriendsHubViewModel(
         }
       }
     }
+
+    // Automatically reject incoming ringing calls if the user has switched availability OFF
+    viewModelScope.launch {
+      combine(calls, myProfileState) { callList, profileState ->
+        callList to (profileState as? UiState.Success)?.data
+      }.collect { (callList, myProfile) ->
+        if (myProfile != null && !myProfile.isCurrentlyAvailable()) {
+          callList
+            .filter { it.calleeUid == currentUserId && it.status == "RINGING" }
+            .forEach { incoming ->
+              repository.updateCallStatus(incoming.id, "DECLINED", 0L)
+            }
+        }
+      }
+    }
   }
 
   fun clearStatusMessage() {
     _statusMessage.value = null
+  }
+
+  fun dismissCallBlockedNotice() {
+    _callBlockedNotice.value = null
   }
 
   fun showMessage(msg: String) {
@@ -261,6 +288,8 @@ class FriendsHubViewModel(
     cityArea: String,
     photoData: String,
     interests: List<String>,
+    approxLat: Double = 0.0,
+    approxLng: Double = 0.0,
     onDone: () -> Unit,
   ) {
     viewModelScope.launch {
@@ -274,6 +303,8 @@ class FriendsHubViewModel(
         cityArea = cityArea,
         photoData = photoData,
         interests = interests,
+        approxLat = approxLat,
+        approxLng = approxLng,
       ).onSuccess {
         _statusMessage.value = "Welcome to FriendsHub!"
         onDone()
@@ -462,57 +493,79 @@ class FriendsHubViewModel(
   fun startOutgoingCall(context: Context, connection: Connection) {
     val myName = (myProfileState.value as? UiState.Success)?.data?.firstName ?: "Friend"
     val calleeUid = connection.otherUid(currentUserId)
+    val calleeName = connection.otherName(currentUserId)
     val participants = listOf(currentUserId, calleeUid)
-    cleanupVoiceSession()
-    _isMuted.value = false
-    _isSpeakerOn.value = false
-    _callDurationSeconds.value = 0L
-    _callConnectionNote.value = "Calling ${connection.otherName(currentUserId)}..."
 
-    val engine = callEngineFactory(context.applicationContext)
-    callEngine = engine
+    viewModelScope.launch {
+      val calleeProfile = repository.getProfileById(calleeUid).getOrNull()
+      if (calleeProfile == null || !calleeProfile.isCurrentlyAvailable()) {
+        val msg = "$calleeName is not online right now. Calls are only allowed when their availability is switched ON."
+        _callBlockedNotice.value = msg
+        _statusMessage.value = "$calleeName is not online right now."
+        return@launch
+      }
 
-    // Buffer local ICE candidates until call document ID exists
-    val bufferedCandidates = mutableListOf<Triple<String, Int, String>>()
-    var createdCallId: String? = null
+      cleanupVoiceSession()
+      _isMuted.value = false
+      _isSpeakerOn.value = false
+      _callDurationSeconds.value = 0L
+      _callConnectionNote.value = "Calling $calleeName..."
 
-    engine.startAsCaller(
-      onOfferCreated = { offerSdp ->
-        viewModelScope.launch {
-          repository.initiateCall(connection, myName, offerSdp)
-            .onSuccess { call ->
-              createdCallId = call.id
-              _activeCallId.value = call.id
-              bufferedCandidates.forEach { (mid, idx, cand) ->
-                launch { repository.addIceCandidate(call.id, participants, mid, idx, cand) }
-              }
-              bufferedCandidates.clear()
-              observeActiveCallSignaling(call.id, isCaller = true)
-            }
-            .onFailure { err ->
-              _statusMessage.value = err.localizedMessage ?: "Unable to start call"
-              cleanupVoiceSession()
-            }
-        }
-      },
-      onIceCandidate = { sdpMid, sdpMLineIndex, candidate ->
-        val cid = createdCallId
-        if (cid == null) {
-          bufferedCandidates.add(Triple(sdpMid, sdpMLineIndex, candidate))
-        } else {
+      val engine = callEngineFactory(context.applicationContext)
+      callEngine = engine
+
+      // Buffer local ICE candidates until call document ID exists
+      val bufferedCandidates = mutableListOf<Triple<String, Int, String>>()
+      var createdCallId: String? = null
+
+      engine.startAsCaller(
+        onOfferCreated = { offerSdp ->
           viewModelScope.launch {
-            repository.addIceCandidate(cid, participants, sdpMid, sdpMLineIndex, candidate)
+            repository.initiateCall(connection, myName, offerSdp)
+              .onSuccess { call ->
+                createdCallId = call.id
+                _activeCallId.value = call.id
+                bufferedCandidates.forEach { (mid, idx, cand) ->
+                  launch { repository.addIceCandidate(call.id, participants, mid, idx, cand) }
+                }
+                bufferedCandidates.clear()
+                observeActiveCallSignaling(call.id, isCaller = true)
+              }
+              .onFailure { err ->
+                val rawMsg = err.localizedMessage ?: "Unable to start call"
+                val friendlyMsg =
+                  if (rawMsg.contains("PERMISSION_DENIED", ignoreCase = true) ||
+                    rawMsg.contains("not online", ignoreCase = true)
+                  ) {
+                    "$calleeName is not online right now. Calls are only allowed when their availability is switched ON."
+                  } else {
+                    rawMsg
+                  }
+                _callBlockedNotice.value = friendlyMsg
+                _statusMessage.value = friendlyMsg
+                cleanupVoiceSession()
+              }
           }
-        }
-      },
-      onConnected = {
-        _callConnectionNote.value = "Connected • Encrypted P2P Audio"
-        startCallTimer()
-      },
-      onDisconnected = { reason ->
-        _callConnectionNote.value = reason
-      },
-    )
+        },
+        onIceCandidate = { sdpMid, sdpMLineIndex, candidate ->
+          val cid = createdCallId
+          if (cid == null) {
+            bufferedCandidates.add(Triple(sdpMid, sdpMLineIndex, candidate))
+          } else {
+            viewModelScope.launch {
+              repository.addIceCandidate(cid, participants, sdpMid, sdpMLineIndex, candidate)
+            }
+          }
+        },
+        onConnected = {
+          _callConnectionNote.value = "Connected • Encrypted P2P Audio"
+          startCallTimer()
+        },
+        onDisconnected = { reason ->
+          _callConnectionNote.value = reason
+        },
+      )
+    }
   }
 
   fun acceptIncomingCall(context: Context, call: VoiceCall) {

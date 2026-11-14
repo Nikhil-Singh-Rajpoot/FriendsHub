@@ -83,6 +83,7 @@ fun ConnectionsScreen(
   requests: List<ConnectionRequest>,
   connections: List<Connection>,
   meetups: List<Meetup>,
+  availableUserIds: Set<String> = emptySet(),
   onAcceptRequest: (ConnectionRequest) -> Unit,
   onRejectRequest: (ConnectionRequest) -> Unit,
   onCallConnection: (Connection) -> Unit,
@@ -145,6 +146,7 @@ fun ConnectionsScreen(
               val peerUid = conn.otherUid(currentUserId)
               val peerName = conn.otherName(currentUserId)
               val peerCity = conn.otherCity(currentUserId)
+              val isPeerOnline = peerUid in availableUserIds
               val latestMeetup = meetups.firstOrNull { it.connectionId == conn.id }
 
               Card(
@@ -155,10 +157,20 @@ fun ConnectionsScreen(
               ) {
                 Column(modifier = Modifier.padding(16.dp)) {
                   Row(verticalAlignment = Alignment.CenterVertically) {
-                    ProfileAvatar(photoData = "", name = peerName, size = 54.dp, isOnline = true)
+                    ProfileAvatar(photoData = "", name = peerName, size = 54.dp, isOnline = isPeerOnline)
                     Spacer(modifier = Modifier.width(12.dp))
                     Column(modifier = Modifier.weight(1f)) {
-                      Text(peerName, style = MaterialTheme.typography.titleLarge)
+                      Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                      ) {
+                        Text(peerName, style = MaterialTheme.typography.titleLarge)
+                        StatusPill(
+                          text = if (isPeerOnline) "Online" else "Offline",
+                          containerColor = if (isPeerOnline) EmeraldContainer else MaterialTheme.colorScheme.surfaceVariant,
+                          contentColor = if (isPeerOnline) EmeraldOnline else MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                      }
                       Text(
                         text = listOfNotNull(conn.activity.takeIf { it.isNotBlank() }, peerCity.takeIf { it.isNotBlank() }).joinToString(" • "),
                         style = MaterialTheme.typography.bodyMedium,

@@ -108,8 +108,13 @@ object LocationPrivacy {
     }
   }
 
-  @SuppressLint("MissingPermission")
-  suspend fun fetchCoarseDeviceLocation(context: Context): Pair<Double, Double>? {
+  data class DetectedLocationAddress(
+    val cityArea: String,
+    val approxLat: Double,
+    val approxLng: Double,
+  )
+
+  private fun hasLocationPermission(context: Context): Boolean {
     val hasCoarse =
       androidx.core.content.ContextCompat.checkSelfPermission(
         context,
@@ -120,7 +125,12 @@ object LocationPrivacy {
         context,
         android.Manifest.permission.ACCESS_FINE_LOCATION,
       ) == android.content.pm.PackageManager.PERMISSION_GRANTED
-    if (!hasCoarse && !hasFine) return null
+    return hasCoarse || hasFine
+  }
+
+  @SuppressLint("MissingPermission")
+  private suspend fun fetchRawDeviceLocation(context: Context): Pair<Double, Double>? {
+    if (!hasLocationPermission(context)) return null
 
     val client = LocationServices.getFusedLocationProviderClient(context.applicationContext)
     return suspendCancellableCoroutine { cont ->
@@ -130,12 +140,12 @@ object LocationPrivacy {
         .getCurrentLocation(Priority.PRIORITY_BALANCED_POWER_ACCURACY, cts.token)
         .addOnSuccessListener { location ->
           if (location != null) {
-            cont.resume(quantizeCoordinate(location.latitude) to quantizeCoordinate(location.longitude))
+            cont.resume(location.latitude to location.longitude)
           } else {
             client.lastLocation
               .addOnSuccessListener { last ->
                 if (last != null) {
-                  cont.resume(quantizeCoordinate(last.latitude) to quantizeCoordinate(last.longitude))
+                  cont.resume(last.latitude to last.longitude)
                 } else {
                   cont.resume(null)
                 }
@@ -145,5 +155,81 @@ object LocationPrivacy {
         }
         .addOnFailureListener { cont.resume(null) }
     }
+  }
+
+  suspend fun fetchCoarseDeviceLocation(context: Context): Pair<Double, Double>? {
+    val raw = fetchRawDeviceLocation(context) ?: return null
+    return quantizeCoordinate(raw.first) to quantizeCoordinate(raw.second)
+  }
+
+  suspend fun detectCityAreaFromDeviceLocation(context: Context): DetectedLocationAddress? {
+    val raw = fetchRawDeviceLocation(context) ?: return null
+    val qLat = quantizeCoordinate(raw.first)
+    val qLng = quantizeCoordinate(raw.second)
+    val cityArea = reverseGeocodeCityArea(context, raw.first, raw.second).orEmpty()
+    return DetectedLocationAddress(
+      cityArea = cityArea,
+      approxLat = qLat,
+      approxLng = qLng,
+    )
+  }
+
+  private fun formatAddressToCityArea(address: android.location.Address?): String {
+    if (address == null) return ""
+    val neighborhood = address.subLocality?.trim().orEmpty()
+    val city = address.locality?.trim().orEmpty()
+    val district = address.subAdminArea?.trim().orEmpty()
+    val state = address.adminArea?.trim().orEmpty()
+
+    val parts =
+      linkedSetOf<String>().apply {
+        if (neighborhood.isNotBlank()) add(neighborhood)
+        if (city.isNotBlank()) {
+          add(city)
+        } else if (district.isNotBlank()) {
+          add(district)
+        }
+        if (size < 2 && state.isNotBlank()) add(state)
+      }
+    return parts.joinToString(", ").take(80)
+  }
+
+  private suspend fun reverseGeocodeCityArea(
+    context: Context,
+    latitude: Double,
+    longitude: Double,
+  ): String? {
+    if (!android.location.Geocoder.isPresent()) return null
+    val geocoder = android.location.Geocoder(context.applicationContext, Locale.getDefault())
+    return runCatching {
+      if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+        suspendCancellableCoroutine<String?> { cont ->
+          geocoder.getFromLocation(
+            latitude,
+            longitude,
+            1,
+            object : android.location.Geocoder.GeocodeListener {
+              override fun onGeocode(addresses: MutableList<android.location.Address>) {
+                if (cont.isActive) {
+                  cont.resume(formatAddressToCityArea(addresses.firstOrNull()))
+                }
+              }
+
+              override fun onError(errorMessage: String?) {
+                if (cont.isActive) {
+                  cont.resume(null)
+                }
+              }
+            },
+          )
+        }
+      } else {
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+          @Suppress("DEPRECATION")
+          val results = geocoder.getFromLocation(latitude, longitude, 1)
+          formatAddressToCityArea(results?.firstOrNull())
+        }
+      }
+    }.getOrNull()
   }
 }

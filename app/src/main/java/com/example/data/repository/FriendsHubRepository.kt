@@ -95,6 +95,8 @@ class FriendsHubRepository(private val db: FirebaseFirestore) {
     cityArea: String,
     photoData: String,
     interests: List<String>,
+    approxLat: Double = 0.0,
+    approxLng: Double = 0.0,
   ): Result<Unit> = runCatching {
     val uid = requireUserId()
     require(LocationPrivacy.isAdult(dateOfBirthMillis)) {
@@ -102,6 +104,9 @@ class FriendsHubRepository(private val db: FirebaseFirestore) {
     }
     val computedAge = LocationPrivacy.calculateAge(dateOfBirthMillis).coerceIn(18, 110)
     val firstName = displayName.trim().substringBefore(" ").ifBlank { displayName.trim() }.take(50)
+    val qLat = if (approxLat != 0.0) LocationPrivacy.quantizeCoordinate(approxLat) else 0.0
+    val qLng = if (approxLng != 0.0) LocationPrivacy.quantizeCoordinate(approxLng) else 0.0
+    val locUpdated = if (qLat != 0.0 || qLng != 0.0) System.currentTimeMillis() else 0L
 
     val userDoc = db.collection("users").document(uid)
     val profileDoc = db.collection("user_profiles").document(uid)
@@ -139,9 +144,9 @@ class FriendsHubRepository(private val db: FirebaseFirestore) {
         "preferredActivity" to (interests.firstOrNull() ?: "Have tea or coffee"),
         "availabilityDurationMinutes" to 0,
         "availabilityExpiresAtMillis" to 0L,
-        "approxLat" to 0.0,
-        "approxLng" to 0.0,
-        "locationUpdatedAtMillis" to 0L,
+        "approxLat" to qLat,
+        "approxLng" to qLng,
+        "locationUpdatedAtMillis" to locUpdated,
         "discoveryOptIn" to true,
         "accountStatus" to "ACTIVE",
         "createdAt" to FieldValue.serverTimestamp(),
@@ -780,6 +785,14 @@ class FriendsHubRepository(private val db: FirebaseFirestore) {
     require(connection.status == "ACTIVE") { "Only active connections can call each other." }
     val calleeUid = connection.otherUid(uid)
     val calleeName = connection.otherName(uid)
+
+    // Ensure the recipient currently has availability switched ON before allowing a call
+    val calleeProfile = getProfileById(calleeUid).getOrNull()
+    if (calleeProfile == null || !calleeProfile.isCurrentlyAvailable()) {
+      throw IllegalStateException(
+        "$calleeName is not online right now. Calls are only allowed while their availability is ON."
+      )
+    }
 
     // Prevent simultaneous active/ringing calls for caller
     val activeCalls =

@@ -71,6 +71,8 @@ import com.example.data.repository.AdminDashboardSnapshot
 import com.example.ui.components.EmptyIllustrationCard
 import com.example.ui.components.ProfileAvatar
 import com.example.ui.components.StatusPill
+import com.example.ui.components.VerificationBadge
+import com.example.ui.theme.CobaltBlue
 import com.example.ui.theme.CoralAlert
 import com.example.ui.theme.CoralContainer
 import com.example.ui.theme.EmeraldContainer
@@ -182,20 +184,49 @@ fun ProfileScreen(
           size = 90.dp,
           isVerified = profile.isVerified,
           isOnline = profile.isCurrentlyAvailable(),
+          showVerificationStatus = true,
         )
         Spacer(modifier = Modifier.height(10.dp))
-        Text("${profile.firstName}, ${profile.age}", style = MaterialTheme.typography.headlineSmall)
+        Row(
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+          Text("${profile.firstName}, ${profile.age}", style = MaterialTheme.typography.headlineSmall)
+          if (profile.isVerified) {
+            Icon(Icons.Rounded.Verified, contentDescription = "Verified", tint = CobaltBlue)
+          }
+        }
         Text(
           profile.cityArea,
           style = MaterialTheme.typography.bodyMedium,
           color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        Spacer(modifier = Modifier.height(8.dp))
-        StatusPill(
-          text = if (profile.isVerified) "Verified Member" else "18+ Adult Verified",
-          containerColor = EmeraldContainer,
-          contentColor = EmeraldOnline,
-        )
+        Spacer(modifier = Modifier.height(10.dp))
+        FlowRow(
+          horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
+          verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+          VerificationBadge(
+            isVerified = profile.isVerified,
+            showLabel = true,
+            verifiedLabel = "Verified Account",
+            unverifiedLabel = "Unverified Account",
+            modifier = Modifier.testTag("my_profile_verification_badge"),
+          )
+          StatusPill(
+            text = "18+ Adult",
+            containerColor = EmeraldContainer,
+            contentColor = EmeraldOnline,
+          )
+        }
+        if (!profile.isVerified) {
+          Spacer(modifier = Modifier.height(6.dp))
+          Text(
+            text = "Pending admin verification. Verified accounts show a blue tick.",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
+        }
         if (editing) {
           Spacer(modifier = Modifier.height(12.dp))
           OutlinedButton(
@@ -844,8 +875,14 @@ fun AdminModerationScreen(
           ) {
             Column(modifier = Modifier.padding(14.dp)) {
               Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
-                Column {
-                  Text("${prof.firstName}, ${prof.age}", style = MaterialTheme.typography.titleMedium)
+                Column(modifier = Modifier.weight(1f)) {
+                  Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                  ) {
+                    Text("${prof.firstName}, ${prof.age}", style = MaterialTheme.typography.titleMedium)
+                    VerificationBadge(isVerified = prof.isVerified, showLabel = true)
+                  }
                   Text(prof.cityArea, style = MaterialTheme.typography.bodyMedium)
                 }
                 StatusPill(

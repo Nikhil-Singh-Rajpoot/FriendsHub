@@ -64,6 +64,8 @@ class FriendsHubViewModel(
   private val _viewerLocation = MutableStateFlow<Pair<Double, Double>?>(null)
   val viewerLocation: StateFlow<Pair<Double, Double>?> = _viewerLocation.asStateFlow()
 
+  private val _cachedPeerProfiles = MutableStateFlow<Map<String, UserProfile>>(emptyMap())
+
   // Live Account & Profile
   val accountState: StateFlow<UiState<UserAccount?>> =
     repository.observeAccount(currentUserId)
@@ -99,6 +101,14 @@ class FriendsHubViewModel(
     repository.observeConnections(currentUserId)
       .catch { emit(emptyList()) }
       .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), emptyList())
+
+  val peerProfiles: StateFlow<Map<String, UserProfile>> =
+    combine(availableProfiles, _cachedPeerProfiles) { liveProfiles, cached ->
+      buildMap {
+        putAll(cached)
+        liveProfiles.forEach { put(it.uid, it) }
+      }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), emptyMap())
 
   val meetups: StateFlow<List<Meetup>> =
     repository.observeMeetups(currentUserId)
@@ -233,6 +243,33 @@ class FriendsHubViewModel(
             .forEach { incoming ->
               repository.updateCallStatus(incoming.id, "DECLINED", 0L)
             }
+        }
+      }
+    }
+
+    // Load profiles for connected/request peers so verification status & avatars stay visible
+    viewModelScope.launch {
+      combine(connections, requests) { connList, reqList ->
+        buildSet {
+          connList.forEach { conn ->
+            val other = conn.otherUid(currentUserId)
+            if (other.isNotBlank()) add(other)
+          }
+          reqList.forEach { req ->
+            val other = if (req.fromUid == currentUserId) req.toUid else req.fromUid
+            if (other.isNotBlank()) add(other)
+          }
+        }
+      }.collect { peerUids ->
+        val missing = peerUids.filter { it !in _cachedPeerProfiles.value }
+        if (missing.isNotEmpty()) {
+          val fetched =
+            missing.mapNotNull { uid ->
+              repository.getProfileById(uid).getOrNull()?.let { uid to it }
+            }.toMap()
+          if (fetched.isNotEmpty()) {
+            _cachedPeerProfiles.value = _cachedPeerProfiles.value + fetched
+          }
         }
       }
     }

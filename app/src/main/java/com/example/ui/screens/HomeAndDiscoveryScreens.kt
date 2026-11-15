@@ -92,6 +92,7 @@ import com.example.ui.components.LiveBadge
 import com.example.ui.components.ProfileAvatar
 import com.example.ui.components.SafetyNoticeCard
 import com.example.ui.components.StatusPill
+import com.example.ui.components.VerificationBadge
 import com.example.ui.theme.CobaltBlue
 import com.example.ui.theme.CobaltBlueContainer
 import com.example.ui.theme.DeepPurple
@@ -663,23 +664,26 @@ fun NearbyMemberCard(
           size = 62.dp,
           isVerified = p.isVerified,
           isOnline = true,
+          showVerificationStatus = true,
         )
         Spacer(modifier = Modifier.width(14.dp))
         Column(modifier = Modifier.weight(1f)) {
-          Row(verticalAlignment = Alignment.CenterVertically) {
+          Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+          ) {
             Text(
               text = "${p.firstName}, ${p.age}",
               style = MaterialTheme.typography.titleLarge,
+              maxLines = 1,
+              overflow = TextOverflow.Ellipsis,
+              modifier = Modifier.weight(1f, fill = false),
             )
-            if (p.isVerified) {
-              Spacer(modifier = Modifier.width(6.dp))
-              Icon(
-                Icons.Rounded.Verified,
-                contentDescription = "Verified",
-                tint = CobaltBlue,
-                modifier = Modifier.size(18.dp),
-              )
-            }
+            VerificationBadge(
+              isVerified = p.isVerified,
+              showLabel = !p.isVerified,
+              modifier = Modifier.testTag(if (p.isVerified) "verified_badge_${p.uid}" else "unverified_badge_${p.uid}"),
+            )
           }
           Text(
             text = "${model.distanceLabel} • ${p.cityArea}",
@@ -800,16 +804,35 @@ fun UserProfileDetailsScreen(
             size = 96.dp,
             isVerified = profile.isVerified,
             isOnline = profile.isCurrentlyAvailable(),
+            showVerificationStatus = true,
           )
           Spacer(modifier = Modifier.height(12.dp))
-          Row(verticalAlignment = Alignment.CenterVertically) {
+          Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+          ) {
             Text("${profile.firstName}, ${profile.age}", style = MaterialTheme.typography.headlineSmall)
             if (profile.isVerified) {
-              Spacer(modifier = Modifier.width(6.dp))
               Icon(Icons.Rounded.Verified, contentDescription = "Verified", tint = CobaltBlue)
             }
           }
-          Spacer(modifier = Modifier.height(4.dp))
+          Spacer(modifier = Modifier.height(6.dp))
+          VerificationBadge(
+            isVerified = profile.isVerified,
+            showLabel = true,
+            verifiedLabel = "Verified Account",
+            unverifiedLabel = "Unverified Account",
+            modifier = Modifier.testTag("profile_details_verification_badge"),
+          )
+          if (!profile.isVerified) {
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+              text = "Not yet verified by admin",
+              style = MaterialTheme.typography.labelSmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+          }
+          Spacer(modifier = Modifier.height(6.dp))
           Text(
             text = "$distanceLabel • ${profile.cityArea}",
             style = MaterialTheme.typography.bodyMedium,

@@ -62,11 +62,13 @@ import com.example.data.model.AvailabilitySession
 import com.example.data.model.Connection
 import com.example.data.model.ConnectionRequest
 import com.example.data.model.Meetup
+import com.example.data.model.UserProfile
 import com.example.data.model.VoiceCall
 import com.example.ui.components.EmptyIllustrationCard
 import com.example.ui.components.ProfileAvatar
 import com.example.ui.components.SafetyNoticeCard
 import com.example.ui.components.StatusPill
+import com.example.ui.components.VerificationBadge
 import com.example.ui.theme.AmberContainer
 import com.example.ui.theme.AmberWarm
 import com.example.ui.theme.CoralAlert
@@ -84,6 +86,7 @@ fun ConnectionsScreen(
   connections: List<Connection>,
   meetups: List<Meetup>,
   availableUserIds: Set<String> = emptySet(),
+  peerProfiles: Map<String, UserProfile> = emptyMap(),
   onAcceptRequest: (ConnectionRequest) -> Unit,
   onRejectRequest: (ConnectionRequest) -> Unit,
   onCallConnection: (Connection) -> Unit,
@@ -146,6 +149,7 @@ fun ConnectionsScreen(
               val peerUid = conn.otherUid(currentUserId)
               val peerName = conn.otherName(currentUserId)
               val peerCity = conn.otherCity(currentUserId)
+              val peerProfile = peerProfiles[peerUid]
               val isPeerOnline = peerUid in availableUserIds
               val latestMeetup = meetups.firstOrNull { it.connectionId == conn.id }
 
@@ -157,14 +161,27 @@ fun ConnectionsScreen(
               ) {
                 Column(modifier = Modifier.padding(16.dp)) {
                   Row(verticalAlignment = Alignment.CenterVertically) {
-                    ProfileAvatar(photoData = "", name = peerName, size = 54.dp, isOnline = isPeerOnline)
+                    ProfileAvatar(
+                      photoData = peerProfile?.photoData.orEmpty(),
+                      name = peerName,
+                      size = 54.dp,
+                      isVerified = peerProfile?.isVerified == true,
+                      isOnline = isPeerOnline,
+                      showVerificationStatus = peerProfile != null,
+                    )
                     Spacer(modifier = Modifier.width(12.dp))
                     Column(modifier = Modifier.weight(1f)) {
                       Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
                       ) {
                         Text(peerName, style = MaterialTheme.typography.titleLarge)
+                        if (peerProfile != null) {
+                          VerificationBadge(
+                            isVerified = peerProfile.isVerified,
+                            showLabel = !peerProfile.isVerified,
+                          )
+                        }
                         StatusPill(
                           text = if (isPeerOnline) "Online" else "Offline",
                           containerColor = if (isPeerOnline) EmeraldContainer else MaterialTheme.colorScheme.surfaceVariant,
@@ -268,11 +285,30 @@ fun ConnectionsScreen(
                 modifier = Modifier.fillMaxWidth(),
               ) {
                 Column(modifier = Modifier.padding(16.dp)) {
+                  val senderProfile = peerProfiles[req.fromUid]
                   Row(verticalAlignment = Alignment.CenterVertically) {
-                    ProfileAvatar(photoData = "", name = req.fromName, size = 50.dp)
+                    ProfileAvatar(
+                      photoData = senderProfile?.photoData.orEmpty(),
+                      name = req.fromName,
+                      size = 50.dp,
+                      isVerified = senderProfile?.isVerified == true,
+                      isOnline = senderProfile?.isCurrentlyAvailable() == true,
+                      showVerificationStatus = senderProfile != null,
+                    )
                     Spacer(modifier = Modifier.width(12.dp))
                     Column(modifier = Modifier.weight(1f)) {
-                      Text(req.fromName, style = MaterialTheme.typography.titleMedium)
+                      Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                      ) {
+                        Text(req.fromName, style = MaterialTheme.typography.titleMedium)
+                        if (senderProfile != null) {
+                          VerificationBadge(
+                            isVerified = senderProfile.isVerified,
+                            showLabel = !senderProfile.isVerified,
+                          )
+                        }
+                      }
                       Text(
                         "${req.activity} • ${req.fromCityArea.ifBlank { "Nearby" }}",
                         style = MaterialTheme.typography.bodyMedium,
@@ -315,13 +351,25 @@ fun ConnectionsScreen(
                 shape = MaterialTheme.shapes.medium,
                 modifier = Modifier.fillMaxWidth(),
               ) {
+                val targetProfile = peerProfiles[req.toUid]
                 Row(
                   modifier = Modifier.padding(14.dp),
                   verticalAlignment = Alignment.CenterVertically,
                   horizontalArrangement = Arrangement.SpaceBetween,
                 ) {
                   Column(modifier = Modifier.weight(1f)) {
-                    Text("To ${req.toName}", style = MaterialTheme.typography.titleMedium)
+                    Row(
+                      verticalAlignment = Alignment.CenterVertically,
+                      horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                      Text("To ${req.toName}", style = MaterialTheme.typography.titleMedium)
+                      if (targetProfile != null) {
+                        VerificationBadge(
+                          isVerified = targetProfile.isVerified,
+                          showLabel = !targetProfile.isVerified,
+                        )
+                      }
+                    }
                     Text("Activity: ${req.activity}", style = MaterialTheme.typography.bodyMedium)
                   }
                   StatusPill(text = "Pending", containerColor = AmberContainer, contentColor = AmberWarm)

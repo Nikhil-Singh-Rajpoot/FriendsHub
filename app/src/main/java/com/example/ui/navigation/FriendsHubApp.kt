@@ -270,6 +270,7 @@ private fun AuthenticatedAppShell(
   val statusMessage by viewModel.statusMessage.collectAsStateWithLifecycle()
   val callBlockedNotice by viewModel.callBlockedNotice.collectAsStateWithLifecycle()
   val viewerLocation by viewModel.viewerLocation.collectAsStateWithLifecycle()
+  val peerProfiles by viewModel.peerProfiles.collectAsStateWithLifecycle()
   val adminSnapshot by viewModel.adminSnapshot.collectAsStateWithLifecycle()
   val adminLoading by viewModel.adminLoading.collectAsStateWithLifecycle()
 
@@ -621,6 +622,7 @@ private fun AuthenticatedAppShell(
                   connections = connections,
                   meetups = meetups,
                   availableUserIds = availableProfiles.filter { it.isCurrentlyAvailable() }.map { it.uid }.toSet(),
+                  peerProfiles = peerProfiles,
                   onAcceptRequest = { viewModel.respondToRequest(it, accept = true) },
                   onRejectRequest = { viewModel.respondToRequest(it, accept = false) },
                   onCallConnection = { viewModel.startOutgoingCall(context, it) },

@@ -17,6 +17,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.ErrorOutline
 import androidx.compose.material.icons.rounded.Shield
 import androidx.compose.material.icons.rounded.Verified
 import androidx.compose.material3.Card
@@ -41,7 +42,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.example.R
+import com.example.ui.theme.AmberContainer
+import com.example.ui.theme.AmberWarm
 import com.example.ui.theme.CobaltBlue
+import com.example.ui.theme.CobaltBlueContainer
 import com.example.ui.theme.DeepPurple
 import com.example.ui.theme.DeepPurpleContainer
 import com.example.ui.theme.EmeraldContainer
@@ -55,6 +59,7 @@ fun ProfileAvatar(
   size: Dp = 56.dp,
   isVerified: Boolean = false,
   isOnline: Boolean = false,
+  showVerificationStatus: Boolean = false,
   modifier: Modifier = Modifier,
 ) {
   val decodedBitmap = remember(photoData) { ImageUtils.decodePhotoData(photoData) }
@@ -117,6 +122,93 @@ fun ProfileAvatar(
             .background(MaterialTheme.colorScheme.surface)
             .padding(1.dp),
       )
+    } else if (showVerificationStatus) {
+      Icon(
+        imageVector = Icons.Rounded.ErrorOutline,
+        contentDescription = "Unverified account",
+        tint = AmberWarm,
+        modifier =
+          Modifier.size((size * 0.3f).coerceAtLeast(16.dp))
+            .align(Alignment.BottomEnd)
+            .clip(CircleShape)
+            .background(MaterialTheme.colorScheme.surface)
+            .padding(1.dp),
+      )
+    }
+  }
+}
+
+@Composable
+fun VerificationBadge(
+  isVerified: Boolean,
+  showLabel: Boolean = true,
+  verifiedLabel: String = "Verified",
+  unverifiedLabel: String = "Unverified",
+  modifier: Modifier = Modifier,
+) {
+  if (isVerified) {
+    if (showLabel) {
+      Surface(
+        color = CobaltBlueContainer,
+        shape = RoundedCornerShape(50),
+        modifier = modifier,
+      ) {
+        Row(
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(4.dp),
+          modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+        ) {
+          Icon(
+            imageVector = Icons.Rounded.Verified,
+            contentDescription = verifiedLabel,
+            tint = CobaltBlue,
+            modifier = Modifier.size(15.dp),
+          )
+          Text(
+            text = verifiedLabel,
+            style = MaterialTheme.typography.labelMedium,
+            color = CobaltBlue,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+          )
+        }
+      }
+    } else {
+      Icon(
+        imageVector = Icons.Rounded.Verified,
+        contentDescription = verifiedLabel,
+        tint = CobaltBlue,
+        modifier = modifier.size(18.dp),
+      )
+    }
+  } else {
+    Surface(
+      color = AmberContainer,
+      shape = RoundedCornerShape(50),
+      modifier = modifier,
+    ) {
+      Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+      ) {
+        Icon(
+          imageVector = Icons.Rounded.ErrorOutline,
+          contentDescription = unverifiedLabel,
+          tint = AmberWarm,
+          modifier = Modifier.size(14.dp),
+        )
+        if (showLabel) {
+          Text(
+            text = unverifiedLabel,
+            style = MaterialTheme.typography.labelSmall,
+            color = AmberWarm,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+          )
+        }
+      }
     }
   }
 }

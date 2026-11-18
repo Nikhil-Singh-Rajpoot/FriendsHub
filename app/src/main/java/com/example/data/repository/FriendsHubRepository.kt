@@ -43,6 +43,13 @@ class FriendsHubRepository(private val db: FirebaseFirestore) {
       ?: throw IllegalStateException("User must be signed in with Google before accessing Firestore.")
   }
 
+  private suspend fun isBlockedBetween(uidA: String, uidB: String): Boolean {
+    val blockAB = runCatching { db.collection("blocked_users").document("${uidA}_${uidB}").get().await().exists() }.getOrDefault(false)
+    if (blockAB) return true
+    val blockBA = runCatching { db.collection("blocked_users").document("${uidB}_${uidA}").get().await().exists() }.getOrDefault(false)
+    return blockBA
+  }
+
   // ---------------------------------------------------------------------------
   // Account & Profile Observation
   // ---------------------------------------------------------------------------
@@ -83,7 +90,7 @@ class FriendsHubRepository(private val db: FirebaseFirestore) {
   }
 
   // ---------------------------------------------------------------------------
-  // Onboarding, Account & Profile Management
+  // Onboarding, Account, Trusted Contact & Profile Management
   // ---------------------------------------------------------------------------
   suspend fun completeOnboarding(
     displayName: String,
@@ -117,6 +124,11 @@ class FriendsHubRepository(private val db: FirebaseFirestore) {
         "displayName" to displayName.trim().take(80),
         "email" to email.trim().take(160),
         "phoneNote" to phoneNote.trim().take(20),
+        "verifiedPhoneNumber" to "",
+        "phoneVerified" to false,
+        "trustedContactName" to "",
+        "trustedContactPhone" to "",
+        "trustedContactConsent" to false,
         "dateOfBirthMillis" to dateOfBirthMillis,
         "isAdultVerified" to true,
         "accountStatus" to "ACTIVE",
@@ -140,6 +152,10 @@ class FriendsHubRepository(private val db: FirebaseFirestore) {
         "photoData" to photoData,
         "interests" to interests.take(10),
         "isVerified" to false,
+        "phoneVerified" to false,
+        "selfieVerified" to false,
+        "selfieStatus" to "NONE",
+        "selfiePhotoData" to "",
         "isAvailable" to false,
         "preferredActivity" to (interests.firstOrNull() ?: "Have tea or coffee"),
         "availabilityDurationMinutes" to 0,
@@ -223,6 +239,89 @@ class FriendsHubRepository(private val db: FirebaseFirestore) {
       throw e
     } catch (e: Exception) {
       handleFirestoreError(e, OperationType.UPDATE, docRef.path)
+      throw e
+    }
+  }
+
+  suspend fun updateTrustedContactSettings(
+    contactName: String,
+    contactPhone: String,
+    consentToAlertOnMissedCheckIn: Boolean,
+  ): Result<Unit> = runCatching {
+    val uid = requireUserId()
+    val docRef = db.collection("users").document(uid)
+    val updates =
+      mapOf(
+        "trustedContactName" to contactName.trim().take(80),
+        "trustedContactPhone" to contactPhone.trim().take(24),
+        "trustedContactConsent" to consentToAlertOnMissedCheckIn,
+        "updatedAt" to FieldValue.serverTimestamp(),
+      )
+    try {
+      docRef.set(updates, SetOptions.merge()).await()
+    } catch (e: CancellationException) {
+      throw e
+    } catch (e: Exception) {
+      handleFirestoreError(e, OperationType.UPDATE, docRef.path)
+      throw e
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Identity Verification (Level 1 Phone OTP & Level 2 Real-Time Selfie)
+  // ---------------------------------------------------------------------------
+  suspend fun recordLevel1PhoneVerified(verifiedPhoneNumber: String): Result<Unit> = runCatching {
+    val uid = requireUserId()
+    val cleanPhone = verifiedPhoneNumber.trim().take(24)
+    val userRef = db.collection("users").document(uid)
+    val profileRef = db.collection("user_profiles").document(uid)
+    try {
+      val batch = db.batch()
+      batch.set(
+        userRef,
+        mapOf(
+          "verifiedPhoneNumber" to cleanPhone,
+          "phoneVerified" to true,
+          "updatedAt" to FieldValue.serverTimestamp(),
+        ),
+        SetOptions.merge(),
+      )
+      batch.set(
+        profileRef,
+        mapOf(
+          "phoneVerified" to true,
+          "updatedAt" to FieldValue.serverTimestamp(),
+        ),
+        SetOptions.merge(),
+      )
+      batch.commit().await()
+    } catch (e: CancellationException) {
+      throw e
+    } catch (e: Exception) {
+      handleFirestoreError(e, OperationType.UPDATE, profileRef.path)
+      throw e
+    }
+  }
+
+  suspend fun submitLevel2LiveSelfie(selfiePhotoData: String): Result<Unit> = runCatching {
+    val uid = requireUserId()
+    require(selfiePhotoData.isNotBlank()) { "Please capture a live selfie first." }
+    val profileRef = db.collection("user_profiles").document(uid)
+    try {
+      profileRef
+        .set(
+          mapOf(
+            "selfiePhotoData" to selfiePhotoData,
+            "selfieStatus" to "PENDING",
+            "updatedAt" to FieldValue.serverTimestamp(),
+          ),
+          SetOptions.merge(),
+        )
+        .await()
+    } catch (e: CancellationException) {
+      throw e
+    } catch (e: Exception) {
+      handleFirestoreError(e, OperationType.UPDATE, profileRef.path)
       throw e
     }
   }
@@ -387,7 +486,7 @@ class FriendsHubRepository(private val db: FirebaseFirestore) {
       }
 
   // ---------------------------------------------------------------------------
-  // Nearby Discovery (Aligned with Firestore rules!)
+  // Nearby Discovery (Aligned with Firestore rules)
   // ---------------------------------------------------------------------------
   fun observeAvailableProfiles(uid: String): Flow<List<UserProfile>> =
     db.collection("user_profiles")
@@ -435,6 +534,25 @@ class FriendsHubRepository(private val db: FirebaseFirestore) {
     require(uid == fromProfile.uid)
     require(toProfile.uid != uid) { "You cannot connect with yourself." }
 
+    // Safety Rule 1: Only verified users can connect
+    val latestFrom = getProfileById(uid).getOrNull() ?: fromProfile
+    val latestTo = getProfileById(toProfile.uid).getOrNull() ?: toProfile
+    if (!latestFrom.isVerified) {
+      throw IllegalStateException(
+        "Only verified users can connect. Complete Level 1 (Phone OTP) & Level 2 (Live Selfie) verification first."
+      )
+    }
+    if (!latestTo.isVerified) {
+      throw IllegalStateException(
+        "Only verified users can connect. ${latestTo.firstName} has not been verified yet."
+      )
+    }
+
+    // Safety Rule 5: Blocked users cannot discover, contact, or call each other
+    if (isBlockedBetween(uid, toProfile.uid)) {
+      throw IllegalStateException("You cannot connect with a blocked user.")
+    }
+
     // Prevent duplicate active requests or already-active connection
     val existingPending =
       db.collection("connection_requests")
@@ -466,9 +584,9 @@ class FriendsHubRepository(private val db: FirebaseFirestore) {
       mapOf(
         "fromUid" to uid,
         "toUid" to toProfile.uid,
-        "fromName" to fromProfile.firstName.ifBlank { "Friend" }.take(60),
-        "toName" to toProfile.firstName.ifBlank { "Friend" }.take(60),
-        "fromCityArea" to fromProfile.cityArea.take(80),
+        "fromName" to latestFrom.firstName.ifBlank { "Friend" }.take(60),
+        "toName" to latestTo.firstName.ifBlank { "Friend" }.take(60),
+        "fromCityArea" to latestFrom.cityArea.take(80),
         "activity" to activity.ifBlank { "Tea" }.take(40),
         "message" to message.trim().take(240),
         "status" to "PENDING",
@@ -482,10 +600,10 @@ class FriendsHubRepository(private val db: FirebaseFirestore) {
       createNotificationInternal(
         recipientUid = toProfile.uid,
         actorUid = uid,
-        actorName = fromProfile.firstName.ifBlank { "Someone" },
+        actorName = latestFrom.firstName.ifBlank { "Someone" },
         type = "CONNECTION_REQUEST",
         title = "New connection request",
-        body = "${fromProfile.firstName} wants to connect for $activity.",
+        body = "${latestFrom.firstName} wants to connect for $activity.",
         referenceId = requestId,
       )
       requestId
@@ -505,6 +623,10 @@ class FriendsHubRepository(private val db: FirebaseFirestore) {
     val uid = requireUserId()
     require(request.toUid == uid) { "Only the recipient can respond to this request." }
     require(request.status == "PENDING") { "Request has already been handled." }
+
+    if (accept && isBlockedBetween(request.fromUid, request.toUid)) {
+      throw IllegalStateException("Cannot accept connection request with a blocked user.")
+    }
 
     val reqRef = db.collection("connection_requests").document(request.id)
     val newStatus = if (accept) "ACCEPTED" else "REJECTED"
@@ -620,7 +742,7 @@ class FriendsHubRepository(private val db: FirebaseFirestore) {
   }
 
   // ---------------------------------------------------------------------------
-  // Meetups
+  // Meetups & Meeting Safety Policy Check-Ins
   // ---------------------------------------------------------------------------
   fun observeMeetups(uid: String): Flow<List<Meetup>> =
     db.collection("meetups")
@@ -644,10 +766,19 @@ class FriendsHubRepository(private val db: FirebaseFirestore) {
     publicLocationName: String,
     publicArea: String,
     notes: String,
+    scheduledAtMillis: Long = System.currentTimeMillis() + 60 * 60_000L,
+    sharedWithTrustedContact: Boolean = false,
   ): Result<String> = runCatching {
     val uid = requireUserId()
     require(connection.status == "ACTIVE") { "Connection is no longer active." }
     val otherUid = connection.otherUid(uid)
+    require(!isBlockedBetween(uid, otherUid)) { "Cannot schedule a meetup with a blocked user." }
+
+    val publicError = LocationPrivacy.validatePublicMeetupLocation(publicLocationName)
+    if (publicError != null) {
+      throw IllegalArgumentException(publicError)
+    }
+
     val otherName = connection.otherName(uid)
     val meetupId = UUID.randomUUID().toString()
     val docRef = db.collection("meetups").document(meetupId)
@@ -663,10 +794,20 @@ class FriendsHubRepository(private val db: FirebaseFirestore) {
         "activity" to activity.take(40),
         "scheduledDateText" to scheduledDateText.trim().take(40),
         "scheduledTimeText" to scheduledTimeText.trim().take(40),
+        "scheduledAtMillis" to scheduledAtMillis.coerceAtLeast(0L),
         "publicLocationName" to publicLocationName.trim().take(120),
         "publicArea" to publicArea.trim().take(100),
         "notes" to notes.trim().take(300),
         "status" to "PROPOSED",
+        "sharedWithTrustedContactUids" to if (sharedWithTrustedContact) listOf(uid) else emptyList(),
+        "checkedInUids" to emptyList<String>(),
+        "checkedInAtMillis" to 0L,
+        "safeUids" to emptyList<String>(),
+        "safeMarkedAtMillis" to 0L,
+        "reminderSentUids" to emptyList<String>(),
+        "reminderSentAtMillis" to 0L,
+        "trustedAlertUids" to emptyList<String>(),
+        "trustedAlertSentAtMillis" to 0L,
         "createdAt" to FieldValue.serverTimestamp(),
         "updatedAt" to FieldValue.serverTimestamp(),
       )
@@ -722,6 +863,147 @@ class FriendsHubRepository(private val db: FirebaseFirestore) {
     }
   }
 
+  suspend fun markMeetupSharedWithTrustedContact(meetup: Meetup): Result<Unit> = runCatching {
+    val uid = requireUserId()
+    val updated = (meetup.sharedWithTrustedContactUids + uid).distinct().take(2)
+    val docRef = db.collection("meetups").document(meetup.id)
+    try {
+      docRef
+        .set(
+          mapOf(
+            "sharedWithTrustedContactUids" to updated,
+            "updatedAt" to FieldValue.serverTimestamp(),
+          ),
+          SetOptions.merge(),
+        )
+        .await()
+    } catch (e: CancellationException) {
+      throw e
+    } catch (e: Exception) {
+      handleFirestoreError(e, OperationType.UPDATE, docRef.path)
+      throw e
+    }
+  }
+
+  suspend fun checkInMeetup(meetup: Meetup): Result<Unit> = runCatching {
+    val uid = requireUserId()
+    val updated = (meetup.checkedInUids + uid).distinct().take(2)
+    val docRef = db.collection("meetups").document(meetup.id)
+    try {
+      docRef
+        .set(
+          mapOf(
+            "checkedInUids" to updated,
+            "checkedInAtMillis" to System.currentTimeMillis(),
+            "updatedAt" to FieldValue.serverTimestamp(),
+          ),
+          SetOptions.merge(),
+        )
+        .await()
+    } catch (e: CancellationException) {
+      throw e
+    } catch (e: Exception) {
+      handleFirestoreError(e, OperationType.UPDATE, docRef.path)
+      throw e
+    }
+  }
+
+  suspend fun markMeetupSafe(meetup: Meetup): Result<Unit> = runCatching {
+    val uid = requireUserId()
+    val updatedSafe = (meetup.safeUids + uid).distinct().take(2)
+    val nextStatus = if (meetup.status == "CONFIRMED") "COMPLETED" else meetup.status
+    val docRef = db.collection("meetups").document(meetup.id)
+    try {
+      docRef
+        .set(
+          mapOf(
+            "safeUids" to updatedSafe,
+            "safeMarkedAtMillis" to System.currentTimeMillis(),
+            "status" to nextStatus,
+            "updatedAt" to FieldValue.serverTimestamp(),
+          ),
+          SetOptions.merge(),
+        )
+        .await()
+    } catch (e: CancellationException) {
+      throw e
+    } catch (e: Exception) {
+      handleFirestoreError(e, OperationType.UPDATE, docRef.path)
+      throw e
+    }
+  }
+
+  suspend fun recordMissedCheckInReminder(meetup: Meetup, myName: String): Result<Unit> = runCatching {
+    val uid = requireUserId()
+    if (uid in meetup.reminderSentUids) return@runCatching
+    val updated = (meetup.reminderSentUids + uid).distinct().take(2)
+    val docRef = db.collection("meetups").document(meetup.id)
+    try {
+      docRef
+        .set(
+          mapOf(
+            "reminderSentUids" to updated,
+            "reminderSentAtMillis" to System.currentTimeMillis(),
+            "updatedAt" to FieldValue.serverTimestamp(),
+          ),
+          SetOptions.merge(),
+        )
+        .await()
+      createNotificationInternal(
+        recipientUid = uid,
+        actorUid = uid,
+        actorName = myName.ifBlank { "Safety Monitor" },
+        type = "MEETUP_CHECKIN_REMINDER",
+        title = "Safety check-in reminder",
+        body = "You haven't checked in for your meetup at ${meetup.publicLocationName}. Please tap Check In or I'm Safe.",
+        referenceId = meetup.id,
+      )
+    } catch (e: CancellationException) {
+      throw e
+    } catch (e: Exception) {
+      handleFirestoreError(e, OperationType.UPDATE, docRef.path)
+      throw e
+    }
+  }
+
+  suspend fun recordTrustedContactAlert(
+    meetup: Meetup,
+    myName: String,
+    trustedContactName: String,
+  ): Result<Unit> = runCatching {
+    val uid = requireUserId()
+    if (uid in meetup.trustedAlertUids) return@runCatching
+    val updated = (meetup.trustedAlertUids + uid).distinct().take(2)
+    val docRef = db.collection("meetups").document(meetup.id)
+    try {
+      docRef
+        .set(
+          mapOf(
+            "trustedAlertUids" to updated,
+            "trustedAlertSentAtMillis" to System.currentTimeMillis(),
+            "updatedAt" to FieldValue.serverTimestamp(),
+          ),
+          SetOptions.merge(),
+        )
+        .await()
+      val target = trustedContactName.ifBlank { "your trusted contact" }
+      createNotificationInternal(
+        recipientUid = uid,
+        actorUid = uid,
+        actorName = myName.ifBlank { "Safety Monitor" },
+        type = "TRUSTED_CONTACT_ALERT",
+        title = "Missed check-in alert triggered",
+        body = "No check-in received for ${meetup.publicLocationName}. Alert prepared for $target.",
+        referenceId = meetup.id,
+      )
+    } catch (e: CancellationException) {
+      throw e
+    } catch (e: Exception) {
+      handleFirestoreError(e, OperationType.UPDATE, docRef.path)
+      throw e
+    }
+  }
+
   suspend fun cancelMeetup(meetup: Meetup, myName: String): Result<Unit> = runCatching {
     val uid = requireUserId()
     val docRef = db.collection("meetups").document(meetup.id)
@@ -755,12 +1037,18 @@ class FriendsHubRepository(private val db: FirebaseFirestore) {
   }
 
   suspend fun completeMeetup(meetup: Meetup): Result<Unit> = runCatching {
-    requireUserId()
+    val uid = requireUserId()
+    val updatedSafe = (meetup.safeUids + uid).distinct().take(2)
     val docRef = db.collection("meetups").document(meetup.id)
     try {
       docRef
         .set(
-          mapOf("status" to "COMPLETED", "updatedAt" to FieldValue.serverTimestamp()),
+          mapOf(
+            "status" to "COMPLETED",
+            "safeUids" to updatedSafe,
+            "safeMarkedAtMillis" to System.currentTimeMillis(),
+            "updatedAt" to FieldValue.serverTimestamp(),
+          ),
           SetOptions.merge(),
         )
         .await()
@@ -819,6 +1107,11 @@ class FriendsHubRepository(private val db: FirebaseFirestore) {
     require(connection.status == "ACTIVE") { "Only active connections can call each other." }
     val calleeUid = connection.otherUid(uid)
     val calleeName = connection.otherName(uid)
+
+    // Safety Rule 5: Blocked users cannot call each other
+    if (isBlockedBetween(uid, calleeUid)) {
+      throw IllegalStateException("Cannot call a blocked user.")
+    }
 
     // Ensure the recipient currently has availability switched ON before allowing a call
     val calleeProfile = getProfileById(calleeUid).getOrNull()
@@ -1209,12 +1502,14 @@ class FriendsHubRepository(private val db: FirebaseFirestore) {
     requireUserId()
     val docRef = db.collection("user_profiles").document(targetUid)
     try {
-      docRef
-        .set(
-          mapOf("isVerified" to verified, "updatedAt" to FieldValue.serverTimestamp()),
-          SetOptions.merge(),
+      val updates =
+        mapOf(
+          "isVerified" to verified,
+          "selfieVerified" to verified,
+          "selfieStatus" to if (verified) "APPROVED" else "REJECTED",
+          "updatedAt" to FieldValue.serverTimestamp(),
         )
-        .await()
+      docRef.set(updates, SetOptions.merge()).await()
     } catch (e: CancellationException) {
       throw e
     } catch (e: Exception) {

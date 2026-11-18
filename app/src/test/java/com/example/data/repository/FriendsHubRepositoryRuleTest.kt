@@ -67,21 +67,67 @@ class FriendsHubRepositoryRuleTest : FirestoreEmulatorTestBase() {
     val availableForAlice = withTimeout(FLOW_TIMEOUT_MS) {
       aliceRepo.observeAvailableProfiles(aliceUid).first { list -> list.any { it.uid == bobUid } }
     }
-    val bobProfile = availableForAlice.first { it.uid == bobUid }
-    assertTrue("isAvailable must deserialize to true from Firestore", bobProfile.isAvailable)
-    assertTrue(bobProfile.isCurrentlyAvailable())
-    assertEquals("Have tea or coffee", bobProfile.preferredActivity)
-    val aliceProfile = withTimeout(TIMEOUT_MS) { aliceRepo.getProfileById(aliceUid).getOrThrow()!! }
+    val bobProfileUnverified = availableForAlice.first { it.uid == bobUid }
+    assertTrue("isAvailable must deserialize to true from Firestore", bobProfileUnverified.isAvailable)
+    assertTrue(bobProfileUnverified.isCurrentlyAvailable())
+    assertEquals("Have tea or coffee", bobProfileUnverified.preferredActivity)
+    val aliceProfileUnverified = withTimeout(TIMEOUT_MS) { aliceRepo.getProfileById(aliceUid).getOrThrow()!! }
+
+    // 3b. Unverified users cannot connect ("Only verified users can connect")
+    val unverifiedConnect = withTimeout(TIMEOUT_MS) {
+      aliceRepo.sendConnectionRequest(
+        fromProfile = aliceProfileUnverified,
+        toProfile = bobProfileUnverified,
+        activity = "Tea",
+        message = "Unverified attempt",
+      )
+    }
+    assertTrue("Unverified users must not be allowed to connect", unverifiedConnect.isFailure)
+
+    // 3c. Level 1 (Phone OTP record) & Level 2 (Live Selfie submission) + Trusted Contact setup
+    assertTrue(
+      withTimeout(TIMEOUT_MS) { aliceRepo.recordLevel1PhoneVerified("+919876543210") }.isSuccess
+    )
+    assertTrue(
+      withTimeout(TIMEOUT_MS) {
+        aliceRepo.submitLevel2LiveSelfie("data:image/jpeg;base64,/9j/4AAQSkZJRg==")
+      }.isSuccess
+    )
+    assertTrue(
+      withTimeout(TIMEOUT_MS) {
+        aliceRepo.updateTrustedContactSettings("Priya Sister", "+919811112222", true)
+      }.isSuccess
+    )
+    signInTestUser(bobEmail)
+    assertTrue(withTimeout(TIMEOUT_MS) { bobRepo.recordLevel1PhoneVerified("+919876500000") }.isSuccess)
+    assertTrue(
+      withTimeout(TIMEOUT_MS) {
+        bobRepo.submitLevel2LiveSelfie("data:image/jpeg;base64,/9j/4AAQSkZJRg==")
+      }.isSuccess
+    )
+
+    // 3d. Admin approves & grants Blue Tick to both Alice and Bob
+    signInVerifiedAdmin()
+    val adminRepo = FriendsHubRepository(firestore)
+    assertTrue(withTimeout(TIMEOUT_MS) { adminRepo.adminToggleVerified(aliceUid, true) }.isSuccess)
+    assertTrue(withTimeout(TIMEOUT_MS) { adminRepo.adminToggleVerified(bobUid, true) }.isSuccess)
 
     // Bob switches live activity from Tea/Coffee to Eat something and back -> reflected live
     signInTestUser(bobEmail)
     assertTrue(withTimeout(TIMEOUT_MS) { bobRepo.updateLiveActivity("Eat something") }.isSuccess)
     val bobAfterUpdate = withTimeout(TIMEOUT_MS) { bobRepo.getProfileById(bobUid).getOrThrow()!! }
     assertEquals("Eat something", bobAfterUpdate.preferredActivity)
+    assertTrue(bobAfterUpdate.isVerified)
+    assertTrue(bobAfterUpdate.selfieVerified)
     assertTrue(withTimeout(TIMEOUT_MS) { bobRepo.updateLiveActivity("Have tea or coffee") }.isSuccess)
-    signInTestUser(aliceEmail)
 
-    // 4. Alice sends a connection request to Bob
+    signInTestUser(aliceEmail)
+    val aliceProfile = withTimeout(TIMEOUT_MS) { aliceRepo.getProfileById(aliceUid).getOrThrow()!! }
+    val bobProfile = withTimeout(TIMEOUT_MS) { aliceRepo.getProfileById(bobUid).getOrThrow()!! }
+    assertTrue(aliceProfile.isVerified)
+    assertEquals("APPROVED", aliceProfile.selfieStatus)
+
+    // 4. Verified Alice sends a connection request to verified Bob
     val sendReq = withTimeout(TIMEOUT_MS) {
       aliceRepo.sendConnectionRequest(
         fromProfile = aliceProfile,
@@ -90,7 +136,7 @@ class FriendsHubRepositoryRuleTest : FirestoreEmulatorTestBase() {
         message = "Let's grab chai near Sector 29!",
       )
     }
-    assertTrue(sendReq.isSuccess)
+    assertTrue("Verified users should connect cleanly: ${sendReq.exceptionOrNull()?.message}", sendReq.isSuccess)
 
     // Duplicate pending request is blocked
     val dupReq = withTimeout(TIMEOUT_MS) {
@@ -145,6 +191,21 @@ class FriendsHubRepositoryRuleTest : FirestoreEmulatorTestBase() {
     val endCall = withTimeout(TIMEOUT_MS) { aliceRepo.updateCallStatus(call.id, "ENDED", 42L) }
     assertTrue(endCall.isSuccess)
 
+    // 6b. Private residential meetup locations are rejected; public cafe with trusted contact succeeds
+    val privateMeetupResult = withTimeout(TIMEOUT_MS) {
+      aliceRepo.proposeMeetup(
+        connection = activeConn,
+        myName = "Alice",
+        activity = "Tea",
+        scheduledDateText = "Today",
+        scheduledTimeText = "6:30 PM",
+        publicLocationName = "My Home Apartment",
+        publicArea = "Sector 29, Gurugram",
+        notes = "",
+      )
+    }
+    assertTrue("Private locations must be rejected", privateMeetupResult.isFailure)
+
     val meetupId = withTimeout(TIMEOUT_MS) {
       aliceRepo.proposeMeetup(
         connection = activeConn,
@@ -155,6 +216,8 @@ class FriendsHubRepositoryRuleTest : FirestoreEmulatorTestBase() {
         publicLocationName = "Blue Tokai Cafe",
         publicArea = "Sector 29, Gurugram",
         notes = "Main entrance table",
+        scheduledAtMillis = System.currentTimeMillis() + 1_800_000L,
+        sharedWithTrustedContact = true,
       ).getOrThrow()
     }
     assertTrue(meetupId.isNotBlank())
@@ -165,7 +228,26 @@ class FriendsHubRepositoryRuleTest : FirestoreEmulatorTestBase() {
     }.first { it.id == meetupId }
     assertTrue(withTimeout(TIMEOUT_MS) { bobRepo.confirmMeetup(meetup, "Bob") }.isSuccess)
 
-    // 7. Bob reports and blocks Alice -> active connection transitions cleanly to ENDED
+    // Alice checks in on arrival, records reminder/trusted alert, and marks I'm Safe
+    signInTestUser(aliceEmail)
+    val meetupForAlice = withTimeout(FLOW_TIMEOUT_MS) {
+      aliceRepo.observeMeetups(aliceUid).first { list -> list.any { it.id == meetupId } }
+    }.first { it.id == meetupId }
+    assertTrue(withTimeout(TIMEOUT_MS) { aliceRepo.checkInMeetup(meetupForAlice) }.isSuccess)
+    assertTrue(withTimeout(TIMEOUT_MS) { aliceRepo.recordMissedCheckInReminder(meetupForAlice, "Alice") }.isSuccess)
+    assertTrue(withTimeout(TIMEOUT_MS) { aliceRepo.recordTrustedContactAlert(meetupForAlice, "Alice", "Priya") }.isSuccess)
+    assertTrue(withTimeout(TIMEOUT_MS) { aliceRepo.markMeetupSafe(meetupForAlice) }.isSuccess)
+
+    val completedMeetup = withTimeout(FLOW_TIMEOUT_MS) {
+      aliceRepo.observeMeetups(aliceUid).first { list ->
+        list.any { it.id == meetupId && it.isMarkedSafeBy(aliceUid) && it.status == "COMPLETED" }
+      }
+    }.first { it.id == meetupId }
+    assertTrue(completedMeetup.isCheckedInBy(aliceUid))
+    assertTrue(completedMeetup.isSharedWithTrustedBy(aliceUid))
+
+    // 7. Bob reports and blocks Alice -> active connection ends and blocked calls/meetups fail
+    signInTestUser(bobEmail)
     val reportRes = withTimeout(TIMEOUT_MS) {
       bobRepo.reportUser(aliceUid, "Alice", "Harassment", "Test safety report")
     }
@@ -175,6 +257,11 @@ class FriendsHubRepositoryRuleTest : FirestoreEmulatorTestBase() {
       bobRepo.blockUser(aliceUid, "Alice", "Safety boundary")
     }
     assertTrue(blockRes.isSuccess)
+
+    val blockedFollowUpCall = withTimeout(TIMEOUT_MS) {
+      bobRepo.initiateCall(activeConn, "Bob", "v=0\no=- 1 1 IN IP4 127.0.0.1\n")
+    }
+    assertTrue("Blocked users cannot call each other", blockedFollowUpCall.isFailure)
 
     val endedConn = withTimeout(FLOW_TIMEOUT_MS) {
       bobRepo.observeConnections(bobUid).first { list ->

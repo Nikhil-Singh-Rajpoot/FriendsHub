@@ -1,6 +1,11 @@
 package com.example.ui.navigation
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -29,9 +34,11 @@ import androidx.compose.material.icons.rounded.Group
 import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.Home
 import androidx.compose.material.icons.rounded.Person
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -43,6 +50,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -62,6 +70,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import androidx.credentials.CredentialManager
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -73,7 +82,6 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.example.R
 import com.example.data.model.Connection
-import com.example.data.model.Meetup
 import com.example.data.model.UiState
 import com.example.data.model.UserProfile
 import com.example.data.repository.FriendsHubRepository
@@ -83,7 +91,9 @@ import com.example.ui.screens.AdminModerationScreen
 import com.example.ui.screens.AuthWelcomeScreen
 import com.example.ui.screens.BlockedUsersScreen
 import com.example.ui.screens.ConnectionsScreen
+import com.example.ui.screens.EmergencyHelpScreen
 import com.example.ui.screens.HomeDashboardScreen
+import com.example.ui.screens.IdentityVerificationScreen
 import com.example.ui.screens.LegalInfoScreen
 import com.example.ui.screens.MeetupDetailsScreen
 import com.example.ui.screens.MeetupPlanningScreen
@@ -95,8 +105,10 @@ import com.example.ui.screens.SendConnectionRequestDialog
 import com.example.ui.screens.SettingsScreen
 import com.example.ui.screens.UserProfileDetailsScreen
 import com.example.ui.screens.VoiceCallScreen
+import com.example.ui.theme.CoralAlert
 import com.example.ui.viewmodel.FriendsHubViewModel
 import com.example.util.LocationPrivacy
+import com.example.util.SafetyNotificationHelper
 import com.google.firebase.Firebase
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.FirebaseUser
@@ -129,6 +141,8 @@ sealed interface SubScreen {
   data object PrivacyPolicy : SubScreen
   data object Terms : SubScreen
   data object AdminModeration : SubScreen
+  data object IdentityVerification : SubScreen
+  data object EmergencyHelp : SubScreen
 }
 
 internal fun FirebaseAuth.authStateFlow(): Flow<FirebaseUser?> = callbackFlow {
@@ -273,6 +287,7 @@ private fun AuthenticatedAppShell(
   val callNote by viewModel.callConnectionNote.collectAsStateWithLifecycle()
   val statusMessage by viewModel.statusMessage.collectAsStateWithLifecycle()
   val callBlockedNotice by viewModel.callBlockedNotice.collectAsStateWithLifecycle()
+  val missedCheckInAlertMeetup by viewModel.missedCheckInAlertMeetup.collectAsStateWithLifecycle()
   val viewerLocation by viewModel.viewerLocation.collectAsStateWithLifecycle()
   val viewerCityArea by viewModel.viewerCityArea.collectAsStateWithLifecycle()
   val peerProfiles by viewModel.peerProfiles.collectAsStateWithLifecycle()
@@ -346,31 +361,74 @@ private fun AuthenticatedAppShell(
   // Voice Call full-screen overlay whenever a call is RINGING or ACTIVE
   val currentCall = activeCall
   if (currentCall != null) {
-    VoiceCallScreen(
-      call = currentCall,
-      currentUserId = viewModel.currentUserId,
-      isMuted = isMuted,
-      isSpeakerOn = isSpeakerOn,
-      durationSeconds = callDuration,
-      connectionNote = callNote,
-      onAcceptIncoming = { viewModel.acceptIncomingCall(context, currentCall) },
-      onDeclineIncoming = { viewModel.declineIncomingCall(currentCall) },
-      onToggleMute = { viewModel.toggleMute() },
-      onToggleSpeaker = { viewModel.toggleSpeaker() },
-      onEndCall = { viewModel.endActiveCall(currentCall) },
-    )
+    var showCallEmergencyHelp by remember(currentCall.id) { mutableStateOf(false) }
+    if (showCallEmergencyHelp) {
+      BackHandler { showCallEmergencyHelp = false }
+      EmergencyHelpScreen(
+        account = account,
+        profile = myProfile,
+        liveCityArea = viewerCityArea ?: myProfile.cityArea,
+        liveCoordinates = viewerLocation ?: myProfile.approxLat.takeIf { it != 0.0 }?.let { it to myProfile.approxLng },
+        activeMeetup = meetups.firstOrNull { it.status == "PROPOSED" || it.status == "CONFIRMED" },
+        onBack = { showCallEmergencyHelp = false },
+        onMarkMeetupSafe = { m -> viewModel.markMeetupSafe(m) },
+        onOpenSettingsForTrustedContact = { showCallEmergencyHelp = false },
+      )
+    } else {
+      VoiceCallScreen(
+        call = currentCall,
+        currentUserId = viewModel.currentUserId,
+        isMuted = isMuted,
+        isSpeakerOn = isSpeakerOn,
+        durationSeconds = callDuration,
+        connectionNote = callNote,
+        onAcceptIncoming = { viewModel.acceptIncomingCall(context, currentCall) },
+        onDeclineIncoming = { viewModel.declineIncomingCall(currentCall) },
+        onToggleMute = { viewModel.toggleMute() },
+        onToggleSpeaker = { viewModel.toggleSpeaker() },
+        onEndCall = { viewModel.endActiveCall(currentCall) },
+        onOpenEmergencyHelp = { showCallEmergencyHelp = true },
+      )
+    }
     return
   }
 
   var currentTab by remember { mutableStateOf(MainTab.HOME) }
   var activeSubScreen by remember { mutableStateOf<SubScreen?>(null) }
   var quickConnectTarget by remember { mutableStateOf<UserProfile?>(null) }
+  var verifyGateMessage by remember { mutableStateOf<String?>(null) }
+  var verifyGateCanSelfVerify by remember { mutableStateOf(false) }
+
+  val notificationPermissionLauncher =
+    rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {}
+
+  val hasConfirmedMeetups = meetups.any { it.status == "CONFIRMED" }
+  LaunchedEffect(hasConfirmedMeetups) {
+    if (
+      hasConfirmedMeetups &&
+      Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+      ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) !=
+        PackageManager.PERMISSION_GRANTED
+    ) {
+      notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+    }
+  }
+
+  LaunchedEffect(myProfile.uid, meetups, account) {
+    while (meetups.any { it.status == "CONFIRMED" }) {
+      viewModel.evaluateMissedMeetupCheckIns(context)
+      delay(15_000L)
+    }
+  }
 
   val lifecycleOwner = LocalLifecycleOwner.current
   DisposableEffect(lifecycleOwner, myProfile.uid) {
     val observer = LifecycleEventObserver { _, event ->
       when (event) {
-        Lifecycle.Event.ON_RESUME -> viewModel.startLiveLocationUpdates(context)
+        Lifecycle.Event.ON_RESUME -> {
+          viewModel.startLiveLocationUpdates(context)
+          viewModel.evaluateMissedMeetupCheckIns(context)
+        }
         Lifecycle.Event.ON_STOP -> viewModel.stopLiveLocationUpdates()
         else -> Unit
       }
@@ -398,6 +456,22 @@ private fun AuthenticatedAppShell(
   val upcomingMeetups = meetups.filter { it.status == "PROPOSED" || it.status == "CONFIRMED" }
   val unreadNotifications = notifications.count { !it.isRead }
 
+  fun attemptConnect(target: UserProfile) {
+    when {
+      !myProfile.isVerified -> {
+        verifyGateCanSelfVerify = true
+        verifyGateMessage =
+          "Only verified users can connect. Complete Level 1 (Phone OTP) and Level 2 (Real-Time Selfie) verification to earn your Blue Tick."
+      }
+      !target.isVerified -> {
+        verifyGateCanSelfVerify = false
+        verifyGateMessage =
+          "${target.firstName} has not completed identity verification yet. Only verified members can connect."
+      }
+      else -> quickConnectTarget = target
+    }
+  }
+
   // Sub-screens take full screen cleanly with BackHandler
   when (val sub = activeSubScreen) {
     is SubScreen.ProfileDetails -> {
@@ -424,6 +498,7 @@ private fun AuthenticatedAppShell(
         profile = liveProfile,
         distanceLabel = distLabel,
         commonInterests = common,
+        myIsVerified = myProfile.isVerified,
         onBack = { activeSubScreen = null },
         onSendRequest = { act, msg ->
           viewModel.sendConnectionRequest(liveProfile, act, msg) {
@@ -440,6 +515,7 @@ private fun AuthenticatedAppShell(
             activeSubScreen = null
           }
         },
+        onOpenVerification = { activeSubScreen = SubScreen.IdentityVerification },
       )
       return
     }
@@ -449,9 +525,22 @@ private fun AuthenticatedAppShell(
         connection = sub.connection,
         currentUserId = viewModel.currentUserId,
         myCityArea = myProfile.cityArea,
+        myName = myProfile.firstName,
+        account = account,
         onBack = { activeSubScreen = null },
-        onPropose = { act, date, time, loc, area, notes ->
-          viewModel.proposeMeetup(sub.connection, act, date, time, loc, area, notes) {
+        onOpenTrustedContactSetup = { activeSubScreen = SubScreen.Settings },
+        onPropose = { act, date, time, loc, area, notes, scheduledAtMillis, shareWithTrustedContact ->
+          viewModel.proposeMeetup(
+            connection = sub.connection,
+            activity = act,
+            dateText = date,
+            timeText = time,
+            locationName = loc,
+            area = area,
+            notes = notes,
+            scheduledAtMillis = scheduledAtMillis,
+            shareWithTrustedContact = shareWithTrustedContact,
+          ) {
             activeSubScreen = null
           }
         },
@@ -467,10 +556,16 @@ private fun AuthenticatedAppShell(
         MeetupDetailsScreen(
           meetup = meetup,
           currentUserId = viewModel.currentUserId,
+          account = account,
+          myName = myProfile.firstName,
           onBack = { activeSubScreen = null },
           onConfirm = { viewModel.confirmMeetup(meetup) },
           onCancel = { viewModel.cancelMeetup(meetup) },
           onComplete = { viewModel.completeMeetup(meetup) },
+          onCheckIn = { viewModel.checkInMeetup(meetup) },
+          onMarkSafe = { viewModel.markMeetupSafe(meetup) },
+          onShareWithTrustedContact = { viewModel.markMeetupSharedWithTrustedContact(meetup) },
+          onOpenEmergencyHelp = { activeSubScreen = SubScreen.EmergencyHelp },
         )
       }
       return
@@ -490,7 +585,35 @@ private fun AuthenticatedAppShell(
         account = account,
         onBack = { activeSubScreen = null },
         onSavePrefs = { p, c, m -> viewModel.updateNotificationPreferences(p, c, m) },
+        onSaveTrustedContact = { name, phone, consent ->
+          viewModel.updateTrustedContact(name, phone, consent)
+        },
         onOpenAdminGate = { activeSubScreen = SubScreen.AdminModeration },
+      )
+      return
+    }
+
+    SubScreen.IdentityVerification -> {
+      IdentityVerificationScreen(
+        account = account,
+        profile = myProfile,
+        onBack = { activeSubScreen = null },
+        onPhoneVerified = { phone -> viewModel.recordLevel1PhoneVerified(phone) },
+        onSubmitLiveSelfie = { photoData -> viewModel.submitLevel2LiveSelfie(photoData) },
+      )
+      return
+    }
+
+    SubScreen.EmergencyHelp -> {
+      EmergencyHelpScreen(
+        account = account,
+        profile = myProfile,
+        liveCityArea = viewerCityArea ?: myProfile.cityArea,
+        liveCoordinates = viewerLocation ?: myProfile.approxLat.takeIf { it != 0.0 }?.let { it to myProfile.approxLng },
+        activeMeetup = upcomingMeetups.firstOrNull(),
+        onBack = { activeSubScreen = null },
+        onMarkMeetupSafe = { m -> viewModel.markMeetupSafe(m) },
+        onOpenSettingsForTrustedContact = { activeSubScreen = SubScreen.Settings },
       )
       return
     }
@@ -623,8 +746,10 @@ private fun AuthenticatedAppShell(
                   onOpenDiscovery = { currentTab = MainTab.DISCOVER },
                   onOpenConnections = { currentTab = MainTab.CONNECTIONS },
                   onOpenProfileDetails = { activeSubScreen = SubScreen.ProfileDetails(it) },
-                  onQuickConnect = { quickConnectTarget = it },
+                  onQuickConnect = ::attemptConnect,
                   onOpenMeetup = { activeSubScreen = SubScreen.MeetupDetails(it.id) },
+                  onOpenVerification = { activeSubScreen = SubScreen.IdentityVerification },
+                  onOpenEmergencyHelp = { activeSubScreen = SubScreen.EmergencyHelp },
                 )
               }
 
@@ -640,7 +765,7 @@ private fun AuthenticatedAppShell(
                   onSelectRadius = { viewModel.setRadiusFilter(it) },
                   onSelectActivity = { viewModel.setActivityFilter(it) },
                   onViewProfile = { activeSubScreen = SubScreen.ProfileDetails(it) },
-                  onConnectClick = { quickConnectTarget = it },
+                  onConnectClick = ::attemptConnect,
                 )
               }
 
@@ -692,6 +817,8 @@ private fun AuthenticatedAppShell(
                   onDeleteAccount = {
                     viewModel.deleteMyAccountData { onSignOut() }
                   },
+                  onOpenVerification = { activeSubScreen = SubScreen.IdentityVerification },
+                  onOpenEmergencyHelp = { activeSubScreen = SubScreen.EmergencyHelp },
                 )
               }
             }
@@ -713,13 +840,90 @@ private fun AuthenticatedAppShell(
     )
   }
 
+  verifyGateMessage?.let { msg ->
+    AlertDialog(
+      onDismissRequest = { verifyGateMessage = null },
+      title = { Text("Verified Users Only") },
+      text = { Text(msg) },
+      confirmButton = {
+        if (verifyGateCanSelfVerify) {
+          Button(
+            onClick = {
+              verifyGateMessage = null
+              activeSubScreen = SubScreen.IdentityVerification
+            },
+            modifier = Modifier.testTag("verify_required_go_button"),
+          ) {
+            Text("Verify Identity Now")
+          }
+        } else {
+          TextButton(
+            onClick = { verifyGateMessage = null },
+            modifier = Modifier.testTag("verify_required_ok_button"),
+          ) {
+            Text("OK")
+          }
+        }
+      },
+      dismissButton = {
+        if (verifyGateCanSelfVerify) {
+          TextButton(onClick = { verifyGateMessage = null }) { Text("Later") }
+        }
+      },
+    )
+  }
+
+  missedCheckInAlertMeetup?.let { missedMeetup ->
+    AlertDialog(
+      onDismissRequest = { viewModel.dismissMissedCheckInAlert() },
+      title = { Text("Missed Check-In Safety Alert") },
+      text = {
+        Text(
+          "You missed your check-in for ${missedMeetup.publicLocationName}. Confirm you are safe or notify ${account.trustedContactName.ifBlank { "your trusted contact" }}.",
+        )
+      },
+      confirmButton = {
+        Button(
+          onClick = {
+            val alertBody =
+              SafetyNotificationHelper.buildMissedCheckInAlertText(
+                myName = myProfile.firstName,
+                trustedContactName = account.trustedContactName,
+                meetup = missedMeetup,
+                liveCityArea = viewerCityArea ?: myProfile.cityArea,
+              )
+            SafetyNotificationHelper.launchTrustedContactSmsOrShare(
+              context = context,
+              phone = account.trustedContactPhone,
+              title = "Send Missed Check-In Alert",
+              body = alertBody,
+            )
+            viewModel.dismissMissedCheckInAlert()
+          },
+          colors = ButtonDefaults.buttonColors(containerColor = CoralAlert),
+          modifier = Modifier.testTag("missed_alert_notify_trusted_button"),
+        ) {
+          Text("Alert Trusted Contact")
+        }
+      },
+      dismissButton = {
+        TextButton(
+          onClick = { viewModel.markMeetupSafe(missedMeetup) },
+          modifier = Modifier.testTag("missed_alert_im_safe_button"),
+        ) {
+          Text("I'm Safe")
+        }
+      },
+    )
+  }
+
   callBlockedNotice?.let { notice ->
-    androidx.compose.material3.AlertDialog(
+    AlertDialog(
       onDismissRequest = { viewModel.dismissCallBlockedNotice() },
       title = { Text("User Not Online") },
       text = { Text(notice) },
       confirmButton = {
-        androidx.compose.material3.TextButton(
+        TextButton(
           onClick = { viewModel.dismissCallBlockedNotice() },
           modifier = Modifier.testTag("dismiss_call_offline_dialog"),
         ) {

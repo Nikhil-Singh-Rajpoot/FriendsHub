@@ -42,7 +42,9 @@ import androidx.compose.material.icons.rounded.Notifications
 import androidx.compose.material.icons.rounded.PersonAdd
 import androidx.compose.material.icons.rounded.Restaurant
 import androidx.compose.material.icons.rounded.Schedule
+import androidx.compose.material.icons.rounded.Sos
 import androidx.compose.material.icons.rounded.Verified
+import androidx.compose.material.icons.rounded.VerifiedUser
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
@@ -94,8 +96,11 @@ import com.example.ui.components.ProfileAvatar
 import com.example.ui.components.SafetyNoticeCard
 import com.example.ui.components.StatusPill
 import com.example.ui.components.VerificationBadge
+import com.example.ui.theme.AmberContainer
+import com.example.ui.theme.AmberWarm
 import com.example.ui.theme.CobaltBlue
 import com.example.ui.theme.CobaltBlueContainer
+import com.example.ui.theme.CoralAlert
 import com.example.ui.theme.DeepPurple
 import com.example.ui.theme.EmeraldContainer
 import com.example.ui.theme.EmeraldOnline
@@ -122,6 +127,8 @@ fun HomeDashboardScreen(
   onOpenProfileDetails: (UserProfile) -> Unit,
   onQuickConnect: (UserProfile) -> Unit,
   onOpenMeetup: (Meetup) -> Unit,
+  onOpenVerification: () -> Unit = {},
+  onOpenEmergencyHelp: () -> Unit = {},
   modifier: Modifier = Modifier,
 ) {
   val context = LocalContext.current
@@ -163,18 +170,58 @@ fun HomeDashboardScreen(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
           )
         }
-        IconButton(
-          onClick = onOpenNotifications,
-          modifier = Modifier.testTag("home_notifications_button"),
-        ) {
-          BadgedBox(
-            badge = {
-              if (unreadNotifications > 0) {
-                Badge { Text(unreadNotifications.coerceAtMost(99).toString()) }
-              }
-            }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+          IconButton(
+            onClick = onOpenEmergencyHelp,
+            modifier = Modifier.testTag("home_emergency_help_button"),
           ) {
-            Icon(Icons.Rounded.Notifications, contentDescription = "Notifications")
+            Icon(Icons.Rounded.Sos, contentDescription = "Emergency Help", tint = CoralAlert)
+          }
+          IconButton(
+            onClick = onOpenNotifications,
+            modifier = Modifier.testTag("home_notifications_button"),
+          ) {
+            BadgedBox(
+              badge = {
+                if (unreadNotifications > 0) {
+                  Badge { Text(unreadNotifications.coerceAtMost(99).toString()) }
+                }
+              }
+            ) {
+              Icon(Icons.Rounded.Notifications, contentDescription = "Notifications")
+            }
+          }
+        }
+      }
+    }
+
+    if (!myProfile.isVerified) {
+      item {
+        Card(
+          colors = CardDefaults.cardColors(containerColor = AmberContainer),
+          shape = MaterialTheme.shapes.large,
+          modifier = Modifier.fillMaxWidth().testTag("home_verify_banner"),
+        ) {
+          Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+              Icon(Icons.Rounded.VerifiedUser, contentDescription = null, tint = AmberWarm)
+              Text(
+                text = "Verify Identity to Connect",
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+              )
+            }
+            Text(
+              text = "Only verified users can connect. Status: ${myProfile.verificationLevelLabel()}",
+              style = MaterialTheme.typography.bodyMedium,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Button(
+              onClick = onOpenVerification,
+              modifier = Modifier.fillMaxWidth().height(48.dp).testTag("home_verify_identity_button"),
+            ) {
+              Text("Complete Level 1 & Level 2 Verification")
+            }
           }
         }
       }
@@ -426,6 +473,18 @@ fun HomeDashboardScreen(
               Text(
                 text = "${next.publicLocationName} • ${next.scheduledDateText}, ${next.scheduledTimeText}",
                 style = MaterialTheme.typography.bodyMedium,
+              )
+              Spacer(modifier = Modifier.height(6.dp))
+              val safetyLabel =
+                when {
+                  next.isMarkedSafeBy(myProfile.uid) -> "Marked Safe"
+                  next.isCheckedInBy(myProfile.uid) -> "Checked In on Arrival"
+                  else -> "Check-In Pending"
+                }
+              StatusPill(
+                text = safetyLabel,
+                containerColor = if (next.isCheckedInBy(myProfile.uid) || next.isMarkedSafeBy(myProfile.uid)) EmeraldContainer else AmberContainer,
+                contentColor = if (next.isCheckedInBy(myProfile.uid) || next.isMarkedSafeBy(myProfile.uid)) EmeraldOnline else AmberWarm,
               )
             }
           }
@@ -862,6 +921,8 @@ fun UserProfileDetailsScreen(
   onSendRequest: (activity: String, message: String) -> Unit,
   onBlockUser: () -> Unit,
   onReportUser: (category: String, details: String) -> Unit,
+  myIsVerified: Boolean = true,
+  onOpenVerification: () -> Unit = {},
 ) {
   var showConnectDialog by remember { mutableStateOf(false) }
   var showReportDialog by remember { mutableStateOf(false) }
@@ -998,17 +1059,40 @@ fun UserProfileDetailsScreen(
 
       SafetyNoticeCard(
         title = "Safety reminder",
-        message = "Meet only at well-lit public places like cafes or parks. Phone numbers and exact locations are never shared.",
+        message = "Meet only at busy, well-lit public places like cafes or parks. Only verified users can connect.",
       )
+
+      val canConnect = myIsVerified && profile.isVerified
+      if (!canConnect) {
+        SafetyNoticeCard(
+          title = "Verification Required to Connect",
+          message =
+            when {
+              !myIsVerified -> "Verify your identity (Level 1 Phone OTP & Level 2 Live Selfie) before sending connection requests."
+              else -> "${profile.firstName} has not completed identity verification yet. Only verified members can connect."
+            },
+        )
+        if (!myIsVerified) {
+          OutlinedButton(
+            onClick = onOpenVerification,
+            modifier = Modifier.fillMaxWidth().height(48.dp).testTag("profile_details_verify_me_button"),
+          ) {
+            Icon(Icons.Rounded.VerifiedUser, contentDescription = null)
+            Spacer(modifier = Modifier.width(6.dp))
+            Text("Verify My Identity")
+          }
+        }
+      }
 
       Button(
         onClick = { showConnectDialog = true },
+        enabled = canConnect,
         shape = MaterialTheme.shapes.medium,
         modifier = Modifier.fillMaxWidth().height(54.dp).testTag("profile_connect_button"),
       ) {
         Icon(Icons.Rounded.PersonAdd, contentDescription = null)
         Spacer(modifier = Modifier.width(8.dp))
-        Text("Send Connection Request")
+        Text(if (canConnect) "Send Connection Request" else "Verified Users Only")
       }
     }
   }

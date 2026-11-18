@@ -83,37 +83,89 @@ object LocationPrivacy {
       PublicMeetupSpot(
         name = "Blue Tokai Coffee Roasters",
         area = cleanArea,
-        categoryHint = "Well-lit public cafe",
+        categoryHint = "Busy well-lit public cafe • High foot traffic",
       ),
       PublicMeetupSpot(
         name = "Third Wave Coffee",
         area = cleanArea,
-        categoryHint = "Popular cafe seating",
+        categoryHint = "Busy public cafe • Open storefront",
+      ),
+      PublicMeetupSpot(
+        name = "Starbucks / Central Mall Atrium",
+        area = cleanArea,
+        categoryHint = "Busy mall ground-floor cafe • Security on site",
+      ),
+      PublicMeetupSpot(
+        name = "Main Mall Food Court",
+        area = cleanArea,
+        categoryHint = "Crowded public dining plaza • CCTV & security",
       ),
       PublicMeetupSpot(
         name = "Central Courtyard / Galleria Plaza",
         area = cleanArea,
-        categoryHint = "Open public promenade",
+        categoryHint = "Busy open public promenade",
       ),
       PublicMeetupSpot(
         name = "Crossword / Public Book Cafe",
         area = cleanArea,
-        categoryHint = "Quiet conversation space",
+        categoryHint = "Well-lit public bookstore cafe",
       ),
       PublicMeetupSpot(
         name = "Main City Park Walking Track",
         area = cleanArea,
-        categoryHint = "Public daytime walking trail",
+        categoryHint = "Busy daytime public walking trail",
       ),
     ).sortedByDescending { spot ->
       when {
         activity.contains("tea", ignoreCase = true) || activity.contains("coffee", ignoreCase = true) ->
-          if (spot.categoryHint.contains("cafe", ignoreCase = true)) 1 else 0
+          if (spot.categoryHint.contains("cafe", ignoreCase = true)) 2 else 0
+        activity.contains("food", ignoreCase = true) || activity.contains("eat", ignoreCase = true) ->
+          if (spot.categoryHint.contains("dining", ignoreCase = true) || spot.categoryHint.contains("mall", ignoreCase = true)) 2 else 0
         activity.contains("walk", ignoreCase = true) ->
-          if (spot.categoryHint.contains("walking", ignoreCase = true)) 1 else 0
+          when {
+            spot.categoryHint.contains("walking", ignoreCase = true) -> 3
+            spot.categoryHint.contains("promenade", ignoreCase = true) -> 1
+            else -> 0
+          }
         else -> 0
       }
     }
+  }
+
+  private val privateLocationTerms =
+    listOf(
+      "my home",
+      "home",
+      "my house",
+      "house no",
+      "flat ",
+      "apartment",
+      "apt ",
+      "hostel room",
+      "bedroom",
+      "my room",
+      "hotel room",
+      "my place",
+      "private villa",
+      "basement",
+      "pg room",
+    )
+
+  /**
+   * Ensures users choose a public, busy meeting place rather than a residential or private venue.
+   * Returns a human-readable error message if invalid, or null if acceptable.
+   */
+  fun validatePublicMeetupLocation(locationName: String): String? {
+    val trimmed = locationName.trim()
+    if (trimmed.length < 3) {
+      return "Enter the name of a busy public place (cafe, mall, or public park)."
+    }
+    val lower = trimmed.lowercase(Locale.US)
+    val matchedPrivate = privateLocationTerms.firstOrNull { term -> lower.contains(term) }
+    if (matchedPrivate != null) {
+      return "For safety, meetups must be at a busy public venue (cafe, mall, or plaza) — not a private or residential location."
+    }
+    return null
   }
 
   private val cityAliases =

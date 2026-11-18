@@ -23,13 +23,16 @@ import androidx.compose.material.icons.rounded.Call
 import androidx.compose.material.icons.rounded.CallEnd
 import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.MicOff
+import androidx.compose.material.icons.rounded.Sos
 import androidx.compose.material.icons.rounded.VolumeUp
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -65,6 +68,7 @@ fun VoiceCallScreen(
   onToggleMute: () -> Unit,
   onToggleSpeaker: () -> Unit,
   onEndCall: () -> Unit,
+  onOpenEmergencyHelp: () -> Unit = {},
 ) {
   val context = LocalContext.current
   val isIncomingRinging = call.status == "RINGING" && call.calleeUid == currentUserId
@@ -123,7 +127,17 @@ fun VoiceCallScreen(
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
           )
         }
-        Spacer(modifier = Modifier.height(36.dp))
+        Spacer(modifier = Modifier.height(10.dp))
+        OutlinedButton(
+          onClick = onOpenEmergencyHelp,
+          colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
+          modifier = Modifier.testTag("call_emergency_help_button"),
+        ) {
+          Icon(Icons.Rounded.Sos, contentDescription = null, tint = CoralAlert)
+          Spacer(modifier = Modifier.size(6.dp))
+          Text("Emergency Help")
+        }
+        Spacer(modifier = Modifier.height(24.dp))
         ProfileAvatar(photoData = "", name = peerName, size = 120.dp)
         Spacer(modifier = Modifier.height(20.dp))
         Text(

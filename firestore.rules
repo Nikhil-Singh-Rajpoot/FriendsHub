@@ -43,6 +43,11 @@ service cloud.firestore {
              exists(/databases/$(database)/documents/blocked_users/$(uidB + '_' + uidA));
     }
 
+    function isProfileVerified(uid) {
+      return exists(/databases/$(database)/documents/user_profiles/$(uid)) &&
+             get(/databases/$(database)/documents/user_profiles/$(uid)).data.isVerified == true;
+    }
+
     // -------------------------------------------------------------------------
     // Entity Validators
     // -------------------------------------------------------------------------
@@ -51,6 +56,11 @@ service cloud.firestore {
              data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 80 &&
              (!('email' in data) || (data.email is string && data.email.size() <= 160)) &&
              (!('phoneNote' in data) || (data.phoneNote is string && data.phoneNote.size() <= 20)) &&
+             (!('verifiedPhoneNumber' in data) || (data.verifiedPhoneNumber is string && data.verifiedPhoneNumber.size() <= 24)) &&
+             (!('phoneVerified' in data) || data.phoneVerified is bool) &&
+             (!('trustedContactName' in data) || (data.trustedContactName is string && data.trustedContactName.size() <= 80)) &&
+             (!('trustedContactPhone' in data) || (data.trustedContactPhone is string && data.trustedContactPhone.size() <= 24)) &&
+             (!('trustedContactConsent' in data) || data.trustedContactConsent is bool) &&
              data.dateOfBirthMillis is int &&
              data.isAdultVerified is bool && data.isAdultVerified == true &&
              data.accountStatus in ['ACTIVE', 'SUSPENDED'] &&
@@ -74,6 +84,10 @@ service cloud.firestore {
              data.interests is list && data.interests.size() <= 10 &&
              (data.interests.size() == 0 || data.interests[0] is string) &&
              data.isVerified is bool &&
+             (!('phoneVerified' in data) || data.phoneVerified is bool) &&
+             (!('selfieVerified' in data) || data.selfieVerified is bool) &&
+             (!('selfieStatus' in data) || data.selfieStatus in ['NONE', 'PENDING', 'APPROVED', 'REJECTED']) &&
+             (!('selfiePhotoData' in data) || (data.selfiePhotoData is string && data.selfiePhotoData.size() <= 350000)) &&
              data.isAvailable is bool &&
              data.preferredActivity is string && data.preferredActivity.size() <= 40 &&
              data.availabilityDurationMinutes is int && data.availabilityDurationMinutes >= 0 && data.availabilityDurationMinutes <= 240 &&
@@ -147,12 +161,22 @@ service cloud.firestore {
              data.activity is string && data.activity.size() >= 1 && data.activity.size() <= 40 &&
              data.scheduledDateText is string && data.scheduledDateText.size() >= 1 && data.scheduledDateText.size() <= 40 &&
              data.scheduledTimeText is string && data.scheduledTimeText.size() >= 1 && data.scheduledTimeText.size() <= 40 &&
+             (!('scheduledAtMillis' in data) || (data.scheduledAtMillis is int && data.scheduledAtMillis >= 0)) &&
              data.publicLocationName is string && data.publicLocationName.size() >= 2 && data.publicLocationName.size() <= 120 &&
              data.publicArea is string && data.publicArea.size() >= 2 && data.publicArea.size() <= 100 &&
              data.notes is string && data.notes.size() <= 300 &&
              data.status in ['PROPOSED', 'CONFIRMED', 'CANCELLED', 'COMPLETED'] &&
              (!('confirmedByUid' in data) || (data.confirmedByUid is string && data.confirmedByUid.size() <= 128)) &&
              (!('cancelledByUid' in data) || (data.cancelledByUid is string && data.cancelledByUid.size() <= 128)) &&
+             (!('sharedWithTrustedContactUids' in data) || (data.sharedWithTrustedContactUids is list && data.sharedWithTrustedContactUids.size() <= 2)) &&
+             (!('checkedInUids' in data) || (data.checkedInUids is list && data.checkedInUids.size() <= 2)) &&
+             (!('checkedInAtMillis' in data) || (data.checkedInAtMillis is int && data.checkedInAtMillis >= 0)) &&
+             (!('safeUids' in data) || (data.safeUids is list && data.safeUids.size() <= 2)) &&
+             (!('safeMarkedAtMillis' in data) || (data.safeMarkedAtMillis is int && data.safeMarkedAtMillis >= 0)) &&
+             (!('reminderSentUids' in data) || (data.reminderSentUids is list && data.reminderSentUids.size() <= 2)) &&
+             (!('reminderSentAtMillis' in data) || (data.reminderSentAtMillis is int && data.reminderSentAtMillis >= 0)) &&
+             (!('trustedAlertUids' in data) || (data.trustedAlertUids is list && data.trustedAlertUids.size() <= 2)) &&
+             (!('trustedAlertSentAtMillis' in data) || (data.trustedAlertSentAtMillis is int && data.trustedAlertSentAtMillis >= 0)) &&
              isValidTimestamp(data.createdAt) &&
              isValidTimestamp(data.updatedAt);
     }
@@ -239,7 +263,7 @@ service cloud.firestore {
                        incoming().role == 'USER' &&
                        incoming().accountStatus == 'ACTIVE' &&
                        incoming().keys().hasAll(['uid', 'displayName', 'dateOfBirthMillis', 'isAdultVerified', 'accountStatus', 'role', 'pushNotificationsEnabled', 'callAlertsEnabled', 'meetupRemindersEnabled', 'onboardingCompleted', 'createdAt', 'updatedAt']) &&
-                       incoming().keys().hasOnly(['uid', 'displayName', 'email', 'phoneNote', 'dateOfBirthMillis', 'isAdultVerified', 'accountStatus', 'role', 'pushNotificationsEnabled', 'callAlertsEnabled', 'meetupRemindersEnabled', 'onboardingCompleted', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['uid', 'displayName', 'email', 'phoneNote', 'verifiedPhoneNumber', 'phoneVerified', 'trustedContactName', 'trustedContactPhone', 'trustedContactConsent', 'dateOfBirthMillis', 'isAdultVerified', 'accountStatus', 'role', 'pushNotificationsEnabled', 'callAlertsEnabled', 'meetupRemindersEnabled', 'onboardingCompleted', 'createdAt', 'updatedAt']) &&
                        isValidUserAccount(incoming());
 
       allow update: if isSignedIn() &&
@@ -254,7 +278,7 @@ service cloud.firestore {
                           incoming().role == existing().role &&
                           incoming().accountStatus == existing().accountStatus &&
                           incoming().createdAt == existing().createdAt &&
-                          incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'email', 'phoneNote', 'dateOfBirthMillis', 'isAdultVerified', 'pushNotificationsEnabled', 'callAlertsEnabled', 'meetupRemindersEnabled', 'onboardingCompleted', 'updatedAt']))
+                          incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'email', 'phoneNote', 'verifiedPhoneNumber', 'phoneVerified', 'trustedContactName', 'trustedContactPhone', 'trustedContactConsent', 'dateOfBirthMillis', 'isAdultVerified', 'pushNotificationsEnabled', 'callAlertsEnabled', 'meetupRemindersEnabled', 'onboardingCompleted', 'updatedAt']))
                        );
 
       allow delete: if isSignedIn() && isValidId(userId) && (request.auth.uid == userId || isAdmin());
@@ -279,9 +303,11 @@ service cloud.firestore {
                        request.auth.uid == profileId &&
                        incoming().uid == request.auth.uid &&
                        incoming().isVerified == false &&
+                       (!('phoneVerified' in incoming()) || incoming().phoneVerified == false) &&
+                       (!('selfieVerified' in incoming()) || incoming().selfieVerified == false) &&
                        incoming().accountStatus == 'ACTIVE' &&
                        incoming().keys().hasAll(['uid', 'firstName', 'age', 'bio', 'cityArea', 'interests', 'isVerified', 'isAvailable', 'preferredActivity', 'availabilityDurationMinutes', 'availabilityExpiresAtMillis', 'approxLat', 'approxLng', 'locationUpdatedAtMillis', 'discoveryOptIn', 'accountStatus', 'createdAt', 'updatedAt']) &&
-                       incoming().keys().hasOnly(['uid', 'firstName', 'age', 'gender', 'bio', 'cityArea', 'photoData', 'interests', 'isVerified', 'isAvailable', 'preferredActivity', 'availabilityDurationMinutes', 'availabilityExpiresAtMillis', 'approxLat', 'approxLng', 'locationUpdatedAtMillis', 'discoveryOptIn', 'accountStatus', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['uid', 'firstName', 'age', 'gender', 'bio', 'cityArea', 'photoData', 'interests', 'isVerified', 'phoneVerified', 'selfieVerified', 'selfieStatus', 'selfiePhotoData', 'isAvailable', 'preferredActivity', 'availabilityDurationMinutes', 'availabilityExpiresAtMillis', 'approxLat', 'approxLng', 'locationUpdatedAtMillis', 'discoveryOptIn', 'accountStatus', 'createdAt', 'updatedAt']) &&
                        isValidUserProfile(incoming());
 
       allow update: if isSignedIn() &&
@@ -290,13 +316,15 @@ service cloud.firestore {
                          (isAdmin() &&
                           incoming().uid == existing().uid &&
                           incoming().createdAt == existing().createdAt &&
-                          incoming().diff(existing()).affectedKeys().hasOnly(['isVerified', 'accountStatus', 'updatedAt'])) ||
+                          incoming().diff(existing()).affectedKeys().hasOnly(['isVerified', 'selfieVerified', 'selfieStatus', 'accountStatus', 'updatedAt'])) ||
                          (request.auth.uid == profileId &&
                           incoming().uid == existing().uid &&
                           incoming().isVerified == existing().isVerified &&
+                          incoming().get('selfieVerified', false) == existing().get('selfieVerified', false) &&
+                          (!incoming().diff(existing()).affectedKeys().hasAny(['selfieStatus']) || incoming().selfieStatus in ['NONE', 'PENDING']) &&
                           incoming().accountStatus == existing().accountStatus &&
                           incoming().createdAt == existing().createdAt &&
-                          incoming().diff(existing()).affectedKeys().hasOnly(['firstName', 'age', 'gender', 'bio', 'cityArea', 'photoData', 'interests', 'isAvailable', 'preferredActivity', 'availabilityDurationMinutes', 'availabilityExpiresAtMillis', 'approxLat', 'approxLng', 'locationUpdatedAtMillis', 'discoveryOptIn', 'updatedAt']))
+                          incoming().diff(existing()).affectedKeys().hasOnly(['firstName', 'age', 'gender', 'bio', 'cityArea', 'photoData', 'interests', 'phoneVerified', 'selfieStatus', 'selfiePhotoData', 'isAvailable', 'preferredActivity', 'availabilityDurationMinutes', 'availabilityExpiresAtMillis', 'approxLat', 'approxLng', 'locationUpdatedAtMillis', 'discoveryOptIn', 'updatedAt']))
                        );
 
       allow delete: if isSignedIn() && isValidId(profileId) && (request.auth.uid == profileId || isAdmin());
@@ -337,7 +365,9 @@ service cloud.firestore {
                        incoming().keys().hasAll(['fromUid', 'toUid', 'fromName', 'toName', 'activity', 'message', 'status', 'participantUids', 'createdAt', 'updatedAt']) &&
                        incoming().keys().hasOnly(['fromUid', 'toUid', 'fromName', 'toName', 'fromCityArea', 'activity', 'message', 'status', 'participantUids', 'createdAt', 'updatedAt']) &&
                        isValidConnectionRequest(incoming()) &&
-                       !isBlockedPair(incoming().fromUid, incoming().toUid);
+                       !isBlockedPair(incoming().fromUid, incoming().toUid) &&
+                       isProfileVerified(incoming().fromUid) &&
+                       isProfileVerified(incoming().toUid);
 
       allow update: if isSignedIn() &&
                        isValidId(requestId) &&
@@ -398,8 +428,9 @@ service cloud.firestore {
                        incoming().proposerUid == request.auth.uid &&
                        incoming().status == 'PROPOSED' &&
                        incoming().keys().hasAll(['connectionId', 'participantUids', 'proposerUid', 'proposerName', 'otherUid', 'otherName', 'activity', 'scheduledDateText', 'scheduledTimeText', 'publicLocationName', 'publicArea', 'notes', 'status', 'createdAt', 'updatedAt']) &&
-                       incoming().keys().hasOnly(['connectionId', 'participantUids', 'proposerUid', 'proposerName', 'otherUid', 'otherName', 'activity', 'scheduledDateText', 'scheduledTimeText', 'publicLocationName', 'publicArea', 'notes', 'status', 'confirmedByUid', 'cancelledByUid', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['connectionId', 'participantUids', 'proposerUid', 'proposerName', 'otherUid', 'otherName', 'activity', 'scheduledDateText', 'scheduledTimeText', 'scheduledAtMillis', 'publicLocationName', 'publicArea', 'notes', 'status', 'confirmedByUid', 'cancelledByUid', 'sharedWithTrustedContactUids', 'checkedInUids', 'checkedInAtMillis', 'safeUids', 'safeMarkedAtMillis', 'reminderSentUids', 'reminderSentAtMillis', 'trustedAlertUids', 'trustedAlertSentAtMillis', 'createdAt', 'updatedAt']) &&
                        isValidMeetup(incoming()) &&
+                       !isBlockedPair(incoming().proposerUid, incoming().otherUid) &&
                        exists(/databases/$(database)/documents/connections/$(incoming().connectionId)) &&
                        get(/databases/$(database)/documents/connections/$(incoming().connectionId)).data.status == 'ACTIVE' &&
                        request.auth.uid in get(/databases/$(database)/documents/connections/$(incoming().connectionId)).data.participantUids;
@@ -409,15 +440,15 @@ service cloud.firestore {
                        isValidMeetup(incoming()) && (
                          isAdmin() ||
                          (request.auth.uid in existing().participantUids &&
-                          existing().status in ['PROPOSED', 'CONFIRMED'] &&
                           incoming().connectionId == existing().connectionId &&
                           incoming().participantUids == existing().participantUids &&
                           incoming().proposerUid == existing().proposerUid &&
                           incoming().createdAt == existing().createdAt &&
                           (
                             (existing().status == 'PROPOSED' && request.auth.uid != existing().proposerUid && incoming().status == 'CONFIRMED' && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'confirmedByUid', 'updatedAt'])) ||
-                            (incoming().status == 'CANCELLED' && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'cancelledByUid', 'updatedAt'])) ||
-                            (existing().status == 'CONFIRMED' && incoming().status == 'COMPLETED' && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt']))
+                            (existing().status in ['PROPOSED', 'CONFIRMED'] && incoming().status == 'CANCELLED' && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'cancelledByUid', 'updatedAt'])) ||
+                            (existing().status == 'CONFIRMED' && incoming().status == 'COMPLETED' && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'safeUids', 'safeMarkedAtMillis', 'updatedAt'])) ||
+                            (existing().status in ['PROPOSED', 'CONFIRMED', 'COMPLETED'] && incoming().status == existing().status && incoming().diff(existing()).affectedKeys().hasOnly(['sharedWithTrustedContactUids', 'checkedInUids', 'checkedInAtMillis', 'safeUids', 'safeMarkedAtMillis', 'reminderSentUids', 'reminderSentAtMillis', 'trustedAlertUids', 'trustedAlertSentAtMillis', 'updatedAt']))
                           ))
                        );
 
@@ -435,6 +466,7 @@ service cloud.firestore {
                        incoming().keys().hasAll(['connectionId', 'callerUid', 'calleeUid', 'callerName', 'calleeName', 'participantUids', 'status', 'durationSeconds', 'startedAtMillis', 'endedAtMillis', 'createdAt', 'updatedAt']) &&
                        incoming().keys().hasOnly(['connectionId', 'callerUid', 'calleeUid', 'callerName', 'calleeName', 'participantUids', 'status', 'offerSdp', 'answerSdp', 'durationSeconds', 'startedAtMillis', 'endedAtMillis', 'createdAt', 'updatedAt']) &&
                        isValidCall(incoming()) &&
+                       !isBlockedPair(incoming().callerUid, incoming().calleeUid) &&
                        exists(/databases/$(database)/documents/connections/$(incoming().connectionId)) &&
                        get(/databases/$(database)/documents/connections/$(incoming().connectionId)).data.status == 'ACTIVE' &&
                        request.auth.uid in get(/databases/$(database)/documents/connections/$(incoming().connectionId)).data.participantUids &&

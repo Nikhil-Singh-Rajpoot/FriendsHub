@@ -1,6 +1,5 @@
 package com.example.ui.screens
 
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -24,13 +23,17 @@ import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Block
 import androidx.compose.material.icons.rounded.Call
 import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Event
 import androidx.compose.material.icons.rounded.Flag
 import androidx.compose.material.icons.rounded.LocationOn
 import androidx.compose.material.icons.rounded.PhoneInTalk
 import androidx.compose.material.icons.rounded.Schedule
-import androidx.compose.material3.AlertDialog
+import androidx.compose.material.icons.rounded.Share
+import androidx.compose.material.icons.rounded.Shield
+import androidx.compose.material.icons.rounded.Sos
+import androidx.compose.material.icons.rounded.VerifiedUser
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -43,6 +46,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
@@ -51,17 +55,20 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import com.example.data.model.AvailabilitySession
 import com.example.data.model.Connection
 import com.example.data.model.ConnectionRequest
 import com.example.data.model.Meetup
+import com.example.data.model.UserAccount
 import com.example.data.model.UserProfile
 import com.example.data.model.VoiceCall
 import com.example.ui.components.EmptyIllustrationCard
@@ -71,12 +78,16 @@ import com.example.ui.components.StatusPill
 import com.example.ui.components.VerificationBadge
 import com.example.ui.theme.AmberContainer
 import com.example.ui.theme.AmberWarm
+import com.example.ui.theme.CobaltBlue
+import com.example.ui.theme.CobaltBlueContainer
 import com.example.ui.theme.CoralAlert
 import com.example.ui.theme.CoralContainer
 import com.example.ui.theme.EmeraldContainer
 import com.example.ui.theme.EmeraldOnline
 import com.example.util.LocationPrivacy
+import com.example.util.SafetyNotificationHelper
 import java.text.SimpleDateFormat
+import java.util.Calendar
 import java.util.Locale
 
 @Composable
@@ -141,7 +152,7 @@ fun ConnectionsScreen(
             item {
               EmptyIllustrationCard(
                 title = "No active connections yet",
-                subtitle = "Discover someone nearby or accept an incoming request to unlock private voice calling and meetup planning.",
+                subtitle = "Verified 18+ users can connect nearby to unlock private voice calling and public meetup planning.",
               )
             }
           } else {
@@ -427,13 +438,23 @@ fun ConnectionsScreen(
   }
 }
 
+private data class MeetupTimePreset(
+  val label: String,
+  val dateText: String,
+  val timeText: String,
+  val offsetMillis: Long,
+)
+
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun MeetupPlanningScreen(
   connection: Connection,
   currentUserId: String,
   myCityArea: String,
+  account: UserAccount? = null,
+  myName: String = "Me",
   onBack: () -> Unit,
+  onOpenTrustedContactSetup: () -> Unit = {},
   onPropose: (
     activity: String,
     dateText: String,
@@ -441,23 +462,58 @@ fun MeetupPlanningScreen(
     locationName: String,
     area: String,
     notes: String,
+    scheduledAtMillis: Long,
+    shareWithTrustedContact: Boolean,
   ) -> Unit,
 ) {
+  val context = LocalContext.current
   val peerName = connection.otherName(currentUserId)
   var activity by remember { mutableStateOf(connection.activity.ifBlank { "Tea" }) }
-  var dateText by remember { mutableStateOf("Today") }
-  var timeText by remember { mutableStateOf("6:30 PM") }
+
+  val timeFmt = remember { SimpleDateFormat("h:mm a", Locale.US) }
+  val now = remember { System.currentTimeMillis() }
+  val presets = remember(now) {
+    val eveningCal = Calendar.getInstance().apply {
+      set(Calendar.HOUR_OF_DAY, 18)
+      set(Calendar.MINUTE, 30)
+      set(Calendar.SECOND, 0)
+      if (timeInMillis <= now) add(Calendar.DAY_OF_YEAR, 1)
+    }
+    listOf(
+      MeetupTimePreset("In 15 min", "Today", timeFmt.format(now + 15 * 60_000L), now + 15 * 60_000L),
+      MeetupTimePreset("In 30 min", "Today", timeFmt.format(now + 30 * 60_000L), now + 30 * 60_000L),
+      MeetupTimePreset("In 1 hour", "Today", timeFmt.format(now + 60 * 60_000L), now + 60 * 60_000L),
+      MeetupTimePreset(
+        label = "6:30 PM",
+        dateText = if (eveningCal.get(Calendar.DAY_OF_YEAR) == Calendar.getInstance().get(Calendar.DAY_OF_YEAR)) "Today" else "Tomorrow",
+        timeText = "6:30 PM",
+        offsetMillis = eveningCal.timeInMillis,
+      ),
+    )
+  }
+
+  var selectedPresetIndex by remember { mutableIntStateOf(2) }
+  var dateText by remember { mutableStateOf(presets[2].dateText) }
+  var timeText by remember { mutableStateOf(presets[2].timeText) }
+  var scheduledAtMillis by remember { mutableLongStateOf(presets[2].offsetMillis) }
+
   var locationName by remember { mutableStateOf("Blue Tokai Coffee Roasters") }
   var publicArea by remember { mutableStateOf(myCityArea.ifBlank { "Sector 29, Gurugram" }) }
   var notes by remember { mutableStateOf("") }
+  var shareWithTrustedContact by remember(account?.trustedContactConsent) {
+    mutableStateOf(account?.hasTrustedContact() == true && account.trustedContactConsent)
+  }
+
   val suggestedSpots = remember(publicArea, activity) {
     LocationPrivacy.suggestPublicMeetupSpots(publicArea, activity)
   }
+  val selectedSpotHint = suggestedSpots.firstOrNull { it.name == locationName }?.categoryHint
+  val publicLocationError = remember(locationName) { LocationPrivacy.validatePublicMeetupLocation(locationName) }
 
   Scaffold(
     topBar = {
       TopAppBar(
-        title = { Text("Plan Meetup with $peerName") },
+        title = { Text("Plan Public Meetup with $peerName") },
         navigationIcon = {
           IconButton(onClick = onBack) {
             Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back")
@@ -475,8 +531,8 @@ fun MeetupPlanningScreen(
       verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
       SafetyNoticeCard(
-        title = "Public meeting places only",
-        message = "Choose a well-lit cafe, park, or public plaza. FriendsHub never shares residential addresses.",
+        title = "Public, busy meeting places only",
+        message = "FriendsHub recommends well-lit, crowded cafes, malls, and public plazas. Never agree to meet at private residences.",
       )
 
       Text("Activity", style = MaterialTheme.typography.labelLarge)
@@ -486,6 +542,25 @@ fun MeetupPlanningScreen(
             selected = activity == act,
             onClick = { activity = act },
             label = { Text(act) },
+          )
+        }
+      }
+
+      Text("Meeting Time (Check-In Schedule)", style = MaterialTheme.typography.labelLarge)
+      Row(
+        modifier = Modifier.horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+      ) {
+        presets.forEachIndexed { idx, preset ->
+          FilterChip(
+            selected = selectedPresetIndex == idx,
+            onClick = {
+              selectedPresetIndex = idx
+              dateText = preset.dateText
+              timeText = preset.timeText
+              scheduledAtMillis = preset.offsetMillis
+            },
+            label = { Text(preset.label) },
           )
         }
       }
@@ -507,7 +582,7 @@ fun MeetupPlanningScreen(
         )
       }
 
-      Text("Suggested Public Spots", style = MaterialTheme.typography.labelLarge)
+      Text("Recommended Busy Public Venues", style = MaterialTheme.typography.labelLarge)
       Row(
         modifier = Modifier.horizontalScroll(rememberScrollState()),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -520,11 +595,20 @@ fun MeetupPlanningScreen(
           )
         }
       }
+      if (!selectedSpotHint.isNullOrBlank()) {
+        StatusPill(
+          text = selectedSpotHint,
+          containerColor = EmeraldContainer,
+          contentColor = EmeraldOnline,
+        )
+      }
 
       OutlinedTextField(
         value = locationName,
         onValueChange = { locationName = it },
-        label = { Text("Public Cafe / Place Name") },
+        label = { Text("Public Cafe / Mall / Park Name") },
+        isError = publicLocationError != null,
+        supportingText = publicLocationError?.let { err -> { Text(err) } },
         singleLine = true,
         modifier = Modifier.fillMaxWidth().testTag("meetup_location_input"),
       )
@@ -540,18 +624,85 @@ fun MeetupPlanningScreen(
       OutlinedTextField(
         value = notes,
         onValueChange = { if (it.length <= 250) notes = it },
-        label = { Text("Optional Note (e.g. Near the main entrance)") },
+        label = { Text("Optional Note (e.g. Ground-floor cafe near main entrance)") },
         maxLines = 3,
         modifier = Modifier.fillMaxWidth(),
       )
 
+      // Share plan with Trusted Contact card
+      Card(
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+        shape = MaterialTheme.shapes.medium,
+        modifier = Modifier.fillMaxWidth(),
+      ) {
+        Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+          ) {
+            Column(modifier = Modifier.weight(1f)) {
+              Text("Share plan with Trusted Contact", style = MaterialTheme.typography.titleSmall)
+              val trustedText =
+                if (account?.hasTrustedContact() == true) {
+                  "Trusted Contact: ${account.trustedContactName} (${account.trustedContactPhone})"
+                } else {
+                  "Opens SMS / Share Sheet so a family member or friend knows your plan."
+                }
+              Text(
+                text = trustedText,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+              )
+            }
+            Switch(
+              checked = shareWithTrustedContact,
+              onCheckedChange = { shareWithTrustedContact = it },
+              modifier = Modifier.testTag("share_trusted_contact_switch"),
+            )
+          }
+          if (account?.hasTrustedContact() != true) {
+            TextButton(onClick = onOpenTrustedContactSetup) {
+              Text("Save a default Trusted Contact in Settings")
+            }
+          }
+        }
+      }
+
       Button(
         onClick = {
-          if (locationName.trim().length >= 2 && publicArea.trim().length >= 2) {
-            onPropose(activity, dateText, timeText, locationName, publicArea, notes)
+          if (publicLocationError == null && publicArea.trim().length >= 2) {
+            if (shareWithTrustedContact) {
+              val shareBody =
+                SafetyNotificationHelper.buildMeetupShareMessage(
+                  myName = myName,
+                  peerName = peerName,
+                  activity = activity,
+                  dateText = dateText,
+                  timeText = timeText,
+                  publicLocationName = locationName,
+                  publicArea = publicArea,
+                )
+              SafetyNotificationHelper.launchTrustedContactSmsOrShare(
+                context = context,
+                phone = account?.trustedContactPhone.orEmpty(),
+                title = "Share Meetup Plan",
+                body = shareBody,
+              )
+            }
+            onPropose(
+              activity,
+              dateText,
+              timeText,
+              locationName,
+              publicArea,
+              notes,
+              scheduledAtMillis,
+              shareWithTrustedContact,
+            )
           }
         },
-        enabled = locationName.trim().length >= 2 && publicArea.trim().length >= 2,
+        enabled = publicLocationError == null && publicArea.trim().length >= 2,
         modifier = Modifier.fillMaxWidth().height(54.dp).testTag("propose_meetup_button"),
       ) {
         Text("Send Meetup Proposal")
@@ -560,17 +711,31 @@ fun MeetupPlanningScreen(
   }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun MeetupDetailsScreen(
   meetup: Meetup,
   currentUserId: String,
+  account: UserAccount? = null,
+  myName: String = "Me",
   onBack: () -> Unit,
   onConfirm: () -> Unit,
   onCancel: () -> Unit,
   onComplete: () -> Unit,
+  onCheckIn: () -> Unit = {},
+  onMarkSafe: () -> Unit = onComplete,
+  onShareWithTrustedContact: () -> Unit = {},
+  onOpenEmergencyHelp: () -> Unit = {},
 ) {
+  val context = LocalContext.current
   val isProposer = meetup.proposerUid == currentUserId
+  val isCheckedIn = meetup.isCheckedInBy(currentUserId)
+  val isSafe = meetup.isMarkedSafeBy(currentUserId)
+  val isShared = meetup.isSharedWithTrustedBy(currentUserId)
+  val reminderSent = meetup.hasReminderSentTo(currentUserId)
+  val alertTriggered = meetup.hasTrustedAlertTriggeredFor(currentUserId)
+  val peerName = meetup.peerNameFor(currentUserId)
+
   val statusColors =
     when (meetup.status) {
       "CONFIRMED" -> EmeraldContainer to EmeraldOnline
@@ -582,10 +747,18 @@ fun MeetupDetailsScreen(
   Scaffold(
     topBar = {
       TopAppBar(
-        title = { Text("Meetup Details") },
+        title = { Text("Meetup & Safety Check-In") },
         navigationIcon = {
           IconButton(onClick = onBack) {
             Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back")
+          }
+        },
+        actions = {
+          IconButton(
+            onClick = onOpenEmergencyHelp,
+            modifier = Modifier.testTag("meetup_emergency_help_button"),
+          ) {
+            Icon(Icons.Rounded.Sos, contentDescription = "Emergency Help", tint = CoralAlert)
           }
         },
       )
@@ -595,6 +768,7 @@ fun MeetupDetailsScreen(
       modifier =
         Modifier.fillMaxSize()
           .padding(innerPadding)
+          .verticalScroll(rememberScrollState())
           .padding(20.dp),
       verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
@@ -640,6 +814,143 @@ fun MeetupDetailsScreen(
         }
       }
 
+      // Meeting Safety Check-In Policy Card
+      if (meetup.status != "CANCELLED") {
+        Card(
+          colors = CardDefaults.cardColors(containerColor = CobaltBlueContainer),
+          shape = MaterialTheme.shapes.large,
+          modifier = Modifier.fillMaxWidth().testTag("meetup_safety_checkin_card"),
+        ) {
+          Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+              Icon(Icons.Rounded.Shield, contentDescription = null, tint = CobaltBlue)
+              Text("Meeting Safety Check-In", style = MaterialTheme.typography.titleMedium)
+            }
+
+            FlowRow(
+              horizontalArrangement = Arrangement.spacedBy(8.dp),
+              verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+              StatusPill(
+                text = if (isShared) "Plan Shared" else "Not Shared Yet",
+                containerColor = if (isShared) EmeraldContainer else AmberContainer,
+                contentColor = if (isShared) EmeraldOnline else AmberWarm,
+              )
+              StatusPill(
+                text = if (isCheckedIn) "Arrived & Checked In" else "Arrival Pending",
+                containerColor = if (isCheckedIn) EmeraldContainer else AmberContainer,
+                contentColor = if (isCheckedIn) EmeraldOnline else AmberWarm,
+              )
+              StatusPill(
+                text = if (isSafe) "Marked Safe" else "Post-Meetup Pending",
+                containerColor = if (isSafe) EmeraldContainer else AmberContainer,
+                contentColor = if (isSafe) EmeraldOnline else AmberWarm,
+              )
+            }
+
+            if (alertTriggered && !isCheckedIn && !isSafe) {
+              Card(
+                colors = CardDefaults.cardColors(containerColor = CoralContainer),
+                shape = MaterialTheme.shapes.medium,
+                modifier = Modifier.fillMaxWidth(),
+              ) {
+                Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                  Text(
+                    text = "Missed Check-In Alert Triggered",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = CoralAlert,
+                  )
+                  Text(
+                    text = "You missed your arrival check-in for this meetup. Confirm you are safe or notify ${account?.trustedContactName?.ifBlank { "your trusted contact" } ?: "your trusted contact"}.",
+                    style = MaterialTheme.typography.bodySmall,
+                  )
+                  Button(
+                    onClick = {
+                      val alertBody =
+                        SafetyNotificationHelper.buildMissedCheckInAlertText(
+                          myName = myName,
+                          trustedContactName = account?.trustedContactName.orEmpty(),
+                          meetup = meetup,
+                          liveCityArea = meetup.publicArea,
+                        )
+                      SafetyNotificationHelper.launchTrustedContactSmsOrShare(
+                        context = context,
+                        phone = account?.trustedContactPhone.orEmpty(),
+                        title = "Send Missed Check-In Alert",
+                        body = alertBody,
+                      )
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = CoralAlert),
+                    modifier = Modifier.fillMaxWidth().height(48.dp),
+                  ) {
+                    Text("Send Alert to Trusted Contact")
+                  }
+                }
+              }
+            } else if (reminderSent && !isCheckedIn && !isSafe) {
+              Text(
+                text = "Reminder: Please tap Check In on arrival or I'm Safe when leaving.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = CoralAlert,
+              )
+            }
+
+            if (!isSafe) {
+              Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+              ) {
+                OutlinedButton(
+                  enabled = !isCheckedIn,
+                  onClick = onCheckIn,
+                  modifier = Modifier.weight(1f).height(48.dp).testTag("checkin_arrival_button"),
+                ) {
+                  Icon(Icons.Rounded.VerifiedUser, contentDescription = null, modifier = Modifier.size(18.dp))
+                  Spacer(modifier = Modifier.width(4.dp))
+                  Text(if (isCheckedIn) "Checked In" else "Check In")
+                }
+                Button(
+                  onClick = onMarkSafe,
+                  colors = ButtonDefaults.buttonColors(containerColor = EmeraldOnline),
+                  modifier = Modifier.weight(1f).height(48.dp).testTag("im_safe_button"),
+                ) {
+                  Icon(Icons.Rounded.CheckCircle, contentDescription = null, modifier = Modifier.size(18.dp))
+                  Spacer(modifier = Modifier.width(4.dp))
+                  Text("I'm Safe")
+                }
+              }
+            }
+
+            OutlinedButton(
+              onClick = {
+                val shareBody =
+                  SafetyNotificationHelper.buildMeetupShareMessage(
+                    myName = myName,
+                    peerName = peerName,
+                    activity = meetup.activity,
+                    dateText = meetup.scheduledDateText,
+                    timeText = meetup.scheduledTimeText,
+                    publicLocationName = meetup.publicLocationName,
+                    publicArea = meetup.publicArea,
+                  )
+                SafetyNotificationHelper.launchTrustedContactSmsOrShare(
+                  context = context,
+                  phone = account?.trustedContactPhone.orEmpty(),
+                  title = "Share Meetup Plan",
+                  body = shareBody,
+                )
+                onShareWithTrustedContact()
+              },
+              modifier = Modifier.fillMaxWidth().height(48.dp).testTag("share_meetup_plan_button"),
+            ) {
+              Icon(Icons.Rounded.Share, contentDescription = null, modifier = Modifier.size(18.dp))
+              Spacer(modifier = Modifier.width(6.dp))
+              Text(if (isShared) "Share Plan Again with Trusted Contact" else "Share Plan with Trusted Contact")
+            }
+          }
+        }
+      }
+
       if (meetup.status == "PROPOSED" && !isProposer) {
         Button(
           onClick = onConfirm,
@@ -654,12 +965,12 @@ fun MeetupDetailsScreen(
         )
       }
 
-      if (meetup.status == "CONFIRMED") {
-        Button(
+      if (meetup.status == "CONFIRMED" && !isSafe) {
+        OutlinedButton(
           onClick = onComplete,
-          modifier = Modifier.fillMaxWidth().height(52.dp),
+          modifier = Modifier.fillMaxWidth().height(48.dp),
         ) {
-          Text("Mark as Completed")
+          Text("Mark Meetup Completed")
         }
       }
 
@@ -671,6 +982,16 @@ fun MeetupDetailsScreen(
         ) {
           Text("Cancel Meetup")
         }
+      }
+
+      OutlinedButton(
+        onClick = onOpenEmergencyHelp,
+        colors = ButtonDefaults.outlinedButtonColors(contentColor = CoralAlert),
+        modifier = Modifier.fillMaxWidth().height(48.dp).testTag("meetup_sos_bottom_button"),
+      ) {
+        Icon(Icons.Rounded.Sos, contentDescription = null)
+        Spacer(modifier = Modifier.width(6.dp))
+        Text("Emergency Help & SOS")
       }
     }
   }

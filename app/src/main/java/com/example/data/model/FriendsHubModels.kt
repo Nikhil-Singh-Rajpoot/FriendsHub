@@ -48,6 +48,11 @@ data class UserAccount(
   val displayName: String = "",
   val email: String = "",
   val phoneNote: String = "",
+  val verifiedPhoneNumber: String = "",
+  val phoneVerified: Boolean = false,
+  val trustedContactName: String = "",
+  val trustedContactPhone: String = "",
+  val trustedContactConsent: Boolean = false,
   val dateOfBirthMillis: Long = 0L,
   @get:PropertyName("isAdultVerified")
   @set:PropertyName("isAdultVerified")
@@ -60,7 +65,9 @@ data class UserAccount(
   val onboardingCompleted: Boolean = false,
   @ServerTimestamp val createdAt: Timestamp? = null,
   @ServerTimestamp val updatedAt: Timestamp? = null,
-)
+) {
+  fun hasTrustedContact(): Boolean = trustedContactName.isNotBlank() && trustedContactPhone.isNotBlank()
+}
 
 @IgnoreExtraProperties
 data class UserProfile(
@@ -76,6 +83,10 @@ data class UserProfile(
   @get:PropertyName("isVerified")
   @set:PropertyName("isVerified")
   var isVerified: Boolean = false,
+  val phoneVerified: Boolean = false,
+  val selfieVerified: Boolean = false,
+  val selfieStatus: String = "NONE",
+  val selfiePhotoData: String = "",
   @get:PropertyName("isAvailable")
   @set:PropertyName("isAvailable")
   var isAvailable: Boolean = false,
@@ -95,6 +106,25 @@ data class UserProfile(
       discoveryOptIn &&
       accountStatus == "ACTIVE" &&
       availabilityExpiresAtMillis > nowMillis
+  }
+
+  fun verificationLevel(): Int {
+    return when {
+      isVerified || selfieVerified -> 2
+      phoneVerified -> 1
+      else -> 0
+    }
+  }
+
+  fun verificationLevelLabel(): String {
+    return when {
+      isVerified -> "Verified (Blue Tick)"
+      selfieVerified -> "Level 2 Selfie Verified"
+      phoneVerified && selfieStatus == "PENDING" -> "Level 1 Verified • Selfie Pending"
+      phoneVerified -> "Level 1 Phone Verified"
+      selfieStatus == "PENDING" -> "Selfie Pending • Needs Phone OTP"
+      else -> "Unverified (Level 0)"
+    }
   }
 }
 
@@ -161,15 +191,32 @@ data class Meetup(
   val activity: String = "",
   val scheduledDateText: String = "",
   val scheduledTimeText: String = "",
+  val scheduledAtMillis: Long = 0L,
   val publicLocationName: String = "",
   val publicArea: String = "",
   val notes: String = "",
   val status: String = "PROPOSED",
   val confirmedByUid: String = "",
   val cancelledByUid: String = "",
+  val sharedWithTrustedContactUids: List<String> = emptyList(),
+  val checkedInUids: List<String> = emptyList(),
+  val checkedInAtMillis: Long = 0L,
+  val safeUids: List<String> = emptyList(),
+  val safeMarkedAtMillis: Long = 0L,
+  val reminderSentUids: List<String> = emptyList(),
+  val reminderSentAtMillis: Long = 0L,
+  val trustedAlertUids: List<String> = emptyList(),
+  val trustedAlertSentAtMillis: Long = 0L,
   @ServerTimestamp val createdAt: Timestamp? = null,
   @ServerTimestamp val updatedAt: Timestamp? = null,
-)
+) {
+  fun peerNameFor(myUid: String): String = if (proposerUid == myUid) otherName else proposerName
+  fun isCheckedInBy(uid: String): Boolean = uid in checkedInUids
+  fun isMarkedSafeBy(uid: String): Boolean = uid in safeUids
+  fun isSharedWithTrustedBy(uid: String): Boolean = uid in sharedWithTrustedContactUids
+  fun hasReminderSentTo(uid: String): Boolean = uid in reminderSentUids
+  fun hasTrustedAlertTriggeredFor(uid: String): Boolean = uid in trustedAlertUids
+}
 
 @IgnoreExtraProperties
 data class VoiceCall(

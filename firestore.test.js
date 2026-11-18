@@ -136,8 +136,8 @@ test("Underage profile (<18) or self-verified profile fails create", async () =>
   await assertFails(aliceDb.collection("user_profiles").doc(ALICE_UID).set(validUserProfile(ALICE_UID, { isVerified: true })));
 });
 
-// 4. Connection requests, block check, and terminal state lock
-test("Connection request create, accept, and block enforcement", async () => {
+// 4. Connection requests: verified-only gate, accept, block check, and terminal state lock
+test("Connection request enforces verified-only connect, accept, and block", async () => {
   const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
   const bobDb = testEnv.authenticatedContext(BOB_UID).firestore();
   const now = new Date();
@@ -154,6 +154,24 @@ test("Connection request create, accept, and block enforcement", async () => {
     createdAt: now,
     updatedAt: now,
   };
+
+  // Unverified users cannot send connection requests
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await ctx.firestore().collection("user_profiles").doc(ALICE_UID).set(validUserProfile(ALICE_UID, { isVerified: false }));
+    await ctx.firestore().collection("user_profiles").doc(BOB_UID).set(validUserProfile(BOB_UID, { isVerified: false }));
+  });
+  await assertFails(aliceDb.collection("connection_requests").doc("req_unverified").set(reqPayload));
+
+  // Only Alice verified -> still fails because Bob is unverified
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await ctx.firestore().collection("user_profiles").doc(ALICE_UID).update({ isVerified: true });
+  });
+  await assertFails(aliceDb.collection("connection_requests").doc("req_half_verified").set(reqPayload));
+
+  // Both verified -> succeeds
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await ctx.firestore().collection("user_profiles").doc(BOB_UID).update({ isVerified: true });
+  });
   await assertSucceeds(aliceDb.collection("connection_requests").doc("req_1").set(reqPayload));
 
   // Sender cannot self-accept
@@ -177,8 +195,8 @@ test("Connection request create, accept, and block enforcement", async () => {
   await assertFails(aliceDb.collection("connection_requests").doc("req_2").set(reqPayload));
 });
 
-// 5. Calls & Meetups gated to active connection participants only
-test("Calls and meetups require active connection and participant membership", async () => {
+// 5. Calls, Blocked Call Prevention, & Meetup Safety Check-In Flow
+test("Calls and meetups enforce active connection, block prevention, and safety check-in lifecycle", async () => {
   const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
   const bobDb = testEnv.authenticatedContext(BOB_UID).firestore();
   const charlieDb = testEnv.authenticatedContext(CHARLIE_UID).firestore();
@@ -240,10 +258,20 @@ test("Calls and meetups require active connection and participant membership", a
       activity: "Tea",
       scheduledDateText: "Today",
       scheduledTimeText: "6:30 PM",
+      scheduledAtMillis: Date.now() + 1800000,
       publicLocationName: "Blue Tokai Cafe",
       publicArea: "Sector 29, Gurugram",
       notes: "Table near the entrance",
       status: "PROPOSED",
+      sharedWithTrustedContactUids: [ALICE_UID],
+      checkedInUids: [],
+      checkedInAtMillis: 0,
+      safeUids: [],
+      safeMarkedAtMillis: 0,
+      reminderSentUids: [],
+      reminderSentAtMillis: 0,
+      trustedAlertUids: [],
+      trustedAlertSentAtMillis: 0,
       createdAt: now,
       updatedAt: now,
     })
@@ -254,6 +282,43 @@ test("Calls and meetups require active connection and participant membership", a
 
   // Bob confirms
   await assertSucceeds(bobDb.collection("meetups").doc("meet_1").update({ status: "CONFIRMED", confirmedByUid: BOB_UID, updatedAt: new Date() }));
+
+  // Alice checks in on arrival, records reminder/trusted alert state, then taps "I'm Safe"
+  await assertSucceeds(
+    aliceDb.collection("meetups").doc("meet_1").update({
+      checkedInUids: [ALICE_UID],
+      checkedInAtMillis: Date.now(),
+      updatedAt: new Date(),
+    })
+  );
+  await assertSucceeds(
+    aliceDb.collection("meetups").doc("meet_1").update({
+      reminderSentUids: [ALICE_UID],
+      reminderSentAtMillis: Date.now(),
+      trustedAlertUids: [ALICE_UID],
+      trustedAlertSentAtMillis: Date.now(),
+      updatedAt: new Date(),
+    })
+  );
+  await assertSucceeds(
+    aliceDb.collection("meetups").doc("meet_1").update({
+      status: "COMPLETED",
+      safeUids: [ALICE_UID],
+      safeMarkedAtMillis: Date.now(),
+      updatedAt: new Date(),
+    })
+  );
+
+  // If Bob blocks Alice, Alice cannot initiate another call or propose a meetup
+  await assertSucceeds(
+    bobDb.collection("blocked_users").doc(`${BOB_UID}_${ALICE_UID}`).set({
+      blockerUid: BOB_UID,
+      blockedUid: ALICE_UID,
+      blockedName: "Alice",
+      createdAt: new Date(),
+    })
+  );
+  await assertFails(aliceDb.collection("calls").doc("call_after_block").set(callPayload));
 });
 
 // 6. Reports & Admin moderation isolation
@@ -300,3 +365,53 @@ test("Ordinary user cannot read reports of others or suspend accounts; verified 
   await assertSucceeds(adminDb.collection("reports").doc("rep_1").get());
   await assertSucceeds(adminDb.collection("reports").doc("rep_1").update({ status: "ACTIONED", updatedAt: new Date() }));
 });
+
+// 7. Identity Verification (Level 1 Phone OTP, Level 2 Live Selfie, Trusted Contact, Anti-Self-Approval)
+test("User can save trusted contact & submit Level 1/2 verification, cannot self-approve Blue Tick", async () => {
+  const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
+  const adminDb = testEnv.authenticatedContext("admin_1", {
+    email: ADMIN_EMAIL,
+    email_verified: true,
+  }).firestore();
+
+  await assertSucceeds(aliceDb.collection("users").doc(ALICE_UID).set(validUserAccount(ALICE_UID)));
+  await assertSucceeds(aliceDb.collection("user_profiles").doc(ALICE_UID).set(validUserProfile(ALICE_UID)));
+
+  // User saves trusted contact + consent + Level 1 phone on private account
+  await assertSucceeds(
+    aliceDb.collection("users").doc(ALICE_UID).update({
+      verifiedPhoneNumber: "+919876543210",
+      phoneVerified: true,
+      trustedContactName: "Priya",
+      trustedContactPhone: "+919811112222",
+      trustedContactConsent: true,
+      updatedAt: new Date(),
+    })
+  );
+
+  // User updates Level 1 flag & submits Level 2 live selfie (PENDING) on profile
+  await assertSucceeds(
+    aliceDb.collection("user_profiles").doc(ALICE_UID).update({
+      phoneVerified: true,
+      selfieStatus: "PENDING",
+      selfiePhotoData: "data:image/jpeg;base64,/9j/4AAQSkZJRg==",
+      updatedAt: new Date(),
+    })
+  );
+
+  // User CANNOT self-approve Level 2 selfie or Blue Tick
+  await assertFails(aliceDb.collection("user_profiles").doc(ALICE_UID).update({ isVerified: true, updatedAt: new Date() }));
+  await assertFails(aliceDb.collection("user_profiles").doc(ALICE_UID).update({ selfieVerified: true, updatedAt: new Date() }));
+  await assertFails(aliceDb.collection("user_profiles").doc(ALICE_UID).update({ selfieStatus: "APPROVED", updatedAt: new Date() }));
+
+  // Verified Admin CAN approve Blue Tick & selfieVerified
+  await assertSucceeds(
+    adminDb.collection("user_profiles").doc(ALICE_UID).update({
+      isVerified: true,
+      selfieVerified: true,
+      selfieStatus: "APPROVED",
+      updatedAt: new Date(),
+    })
+  );
+});
+

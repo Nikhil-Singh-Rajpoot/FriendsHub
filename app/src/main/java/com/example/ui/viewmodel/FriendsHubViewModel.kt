@@ -4,14 +4,12 @@ import android.content.Context
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.example.data.model.ActivityCategory
 import com.example.data.model.AppNotification
 import com.example.data.model.AvailabilityDuration
 import com.example.data.model.AvailabilitySession
 import com.example.data.model.BlockedUser
 import com.example.data.model.Connection
 import com.example.data.model.ConnectionRequest
-import com.example.data.model.IceCandidateRecord
 import com.example.data.model.Meetup
 import com.example.data.model.NearbyUserCardModel
 import com.example.data.model.RadiusFilter
@@ -23,9 +21,9 @@ import com.example.data.remote.unwrapFirestoreException
 import com.example.data.repository.AdminDashboardSnapshot
 import com.example.data.repository.FriendsHubRepository
 import com.example.util.LocationPrivacy
+import com.example.util.SafetyNotificationHelper
 import com.example.voice.VoiceCallEngine
 import com.example.voice.WebRtcVoiceCallEngine
-import java.util.UUID
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -60,6 +58,9 @@ class FriendsHubViewModel(
 
   private val _callBlockedNotice = MutableStateFlow<String?>(null)
   val callBlockedNotice: StateFlow<String?> = _callBlockedNotice.asStateFlow()
+
+  private val _missedCheckInAlertMeetup = MutableStateFlow<Meetup?>(null)
+  val missedCheckInAlertMeetup: StateFlow<Meetup?> = _missedCheckInAlertMeetup.asStateFlow()
 
   private val _viewerLocation = MutableStateFlow<Pair<Double, Double>?>(null)
   val viewerLocation: StateFlow<Pair<Double, Double>?> = _viewerLocation.asStateFlow()
@@ -99,15 +100,40 @@ class FriendsHubViewModel(
       .catch { emit(emptyList()) }
       .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), emptyList())
 
-  val requests: StateFlow<List<ConnectionRequest>> =
-    repository.observeConnectionRequests(currentUserId)
+  val blocks: StateFlow<List<BlockedUser>> =
+    repository.observeBlocks(currentUserId)
       .catch { emit(emptyList()) }
       .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), emptyList())
 
-  val connections: StateFlow<List<Connection>> =
-    repository.observeConnections(currentUserId)
+  val blockedByOthers: StateFlow<List<BlockedUser>> =
+    repository.observeBlockedByOthers(currentUserId)
       .catch { emit(emptyList()) }
       .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), emptyList())
+
+  private val allBlockedUids: StateFlow<Set<String>> =
+    combine(blocks, blockedByOthers) { myBlocks, blockedMe ->
+      (myBlocks.map { it.blockedUid } + blockedMe.map { it.blockerUid }).toSet()
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), emptySet())
+
+  // Filtered against blockedUids so blocked users cannot see requests, contact, or call each other
+  val requests: StateFlow<List<ConnectionRequest>> =
+    combine(
+      repository.observeConnectionRequests(currentUserId).catch { emit(emptyList()) },
+      allBlockedUids,
+    ) { list, blocked ->
+      list.filter { req ->
+        val other = if (req.fromUid == currentUserId) req.toUid else req.fromUid
+        other !in blocked
+      }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), emptyList())
+
+  val connections: StateFlow<List<Connection>> =
+    combine(
+      repository.observeConnections(currentUserId).catch { emit(emptyList()) },
+      allBlockedUids,
+    ) { list, blocked ->
+      list.filter { conn -> conn.otherUid(currentUserId) !in blocked }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), emptyList())
 
   val peerProfiles: StateFlow<Map<String, UserProfile>> =
     combine(availableProfiles, _cachedPeerProfiles) { liveProfiles, cached ->
@@ -118,22 +144,18 @@ class FriendsHubViewModel(
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), emptyMap())
 
   val meetups: StateFlow<List<Meetup>> =
-    repository.observeMeetups(currentUserId)
-      .catch { emit(emptyList()) }
-      .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), emptyList())
+    combine(
+      repository.observeMeetups(currentUserId).catch { emit(emptyList()) },
+      allBlockedUids,
+    ) { list, blocked ->
+      list.filter { meetup ->
+        val other = if (meetup.proposerUid == currentUserId) meetup.otherUid else meetup.proposerUid
+        other !in blocked
+      }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), emptyList())
 
   val calls: StateFlow<List<VoiceCall>> =
     repository.observeCalls(currentUserId)
-      .catch { emit(emptyList()) }
-      .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), emptyList())
-
-  val blocks: StateFlow<List<BlockedUser>> =
-    repository.observeBlocks(currentUserId)
-      .catch { emit(emptyList()) }
-      .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), emptyList())
-
-  val blockedByOthers: StateFlow<List<BlockedUser>> =
-    repository.observeBlockedByOthers(currentUserId)
       .catch { emit(emptyList()) }
       .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), emptyList())
 
@@ -147,13 +169,12 @@ class FriendsHubViewModel(
       .catch { emit(emptyList()) }
       .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), emptyList())
 
-  // Filtered Nearby Discovery cards (strictly local to user's GPS radius or matching city/area)
+  // Filtered Nearby Discovery cards (strictly local to user's GPS radius or matching city/area, excluding blocked users)
   val nearbyUsers: StateFlow<List<NearbyUserCardModel>> =
     combine(
       myProfileState,
       availableProfiles,
-      blocks,
-      blockedByOthers,
+      allBlockedUids,
       _radiusFilter,
       _activityFilter,
       _viewerLocation,
@@ -164,17 +185,14 @@ class FriendsHubViewModel(
       @Suppress("UNCHECKED_CAST")
       val candidates = values[1] as List<UserProfile>
       @Suppress("UNCHECKED_CAST")
-      val myBlocks = values[2] as List<BlockedUser>
+      val blockedUids = values[2] as Set<String>
+      val radius = values[3] as RadiusFilter
+      val activity = values[4] as String?
       @Suppress("UNCHECKED_CAST")
-      val blockedMe = values[3] as List<BlockedUser>
-      val radius = values[4] as RadiusFilter
-      val activity = values[5] as String?
-      @Suppress("UNCHECKED_CAST")
-      val viewerCoords = values[6] as Pair<Double, Double>?
-      val liveCityArea = values[7] as String?
+      val viewerCoords = values[5] as Pair<Double, Double>?
+      val liveCityArea = values[6] as String?
 
       val me = (myProfileStateVal as? UiState.Success)?.data
-      val blockedUids = (myBlocks.map { it.blockedUid } + blockedMe.map { it.blockerUid }).toSet()
 
       LocationPrivacy.buildNearbyUserCards(
         myProfile = me,
@@ -188,18 +206,19 @@ class FriendsHubViewModel(
       )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), emptyList())
 
-  // Active / Ringing Call state
+  // Active / Ringing Call state (never surface ringing calls from blocked users)
   private val _activeCallId = MutableStateFlow<String?>(null)
   val activeCall: StateFlow<VoiceCall?> =
-    combine(calls, myProfileState, _activeCallId) { callList, profileState, activeId ->
+    combine(calls, myProfileState, allBlockedUids, _activeCallId) { callList, profileState, blocked, activeId ->
       val myProfile = (profileState as? UiState.Success)?.data
       val amAvailable = myProfile?.isCurrentlyAvailable() == true
       if (activeId != null) {
         callList.firstOrNull { it.id == activeId }
       } else {
         callList.firstOrNull { call ->
-          call.status == "ACTIVE" ||
-            (call.status == "RINGING" && (call.callerUid == currentUserId || amAvailable))
+          call.peerUid(currentUserId) !in blocked &&
+            (call.status == "ACTIVE" ||
+              (call.status == "RINGING" && (call.callerUid == currentUserId || amAvailable)))
         }
       }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), null)
@@ -242,18 +261,20 @@ class FriendsHubViewModel(
       }
     }
 
-    // Automatically reject incoming ringing calls if the user has switched availability OFF
+    // Automatically reject incoming ringing calls if availability is OFF or caller is blocked
     viewModelScope.launch {
-      combine(calls, myProfileState) { callList, profileState ->
-        callList to (profileState as? UiState.Success)?.data
-      }.collect { (callList, myProfile) ->
-        if (myProfile != null && !myProfile.isCurrentlyAvailable()) {
-          callList
-            .filter { it.calleeUid == currentUserId && it.status == "RINGING" }
-            .forEach { incoming ->
+      combine(calls, myProfileState, allBlockedUids) { callList, profileState, blocked ->
+        Triple(callList, (profileState as? UiState.Success)?.data, blocked)
+      }.collect { (callList, myProfile, blocked) ->
+        callList
+          .filter { it.calleeUid == currentUserId && it.status == "RINGING" }
+          .forEach { incoming ->
+            val shouldRejectForOffline = myProfile != null && !myProfile.isCurrentlyAvailable()
+            val shouldRejectForBlock = incoming.callerUid in blocked
+            if (shouldRejectForOffline || shouldRejectForBlock) {
               repository.updateCallStatus(incoming.id, "DECLINED", 0L)
             }
-        }
+          }
       }
     }
 
@@ -293,6 +314,10 @@ class FriendsHubViewModel(
     _callBlockedNotice.value = null
   }
 
+  fun dismissMissedCheckInAlert() {
+    _missedCheckInAlertMeetup.value = null
+  }
+
   fun showMessage(msg: String) {
     _statusMessage.value = msg
   }
@@ -306,7 +331,7 @@ class FriendsHubViewModel(
   }
 
   // ---------------------------------------------------------------------------
-  // Onboarding & Profile
+  // Onboarding, Trusted Contacts, Identity Verification & Profile
   // ---------------------------------------------------------------------------
   fun completeOnboarding(
     displayName: String,
@@ -368,6 +393,38 @@ class FriendsHubViewModel(
     viewModelScope.launch {
       repository.updateNotificationPreferences(push, calls, meetups)
         .onFailure { _statusMessage.value = it.localizedMessage ?: "Could not save preferences" }
+    }
+  }
+
+  fun updateTrustedContact(name: String, phone: String, consent: Boolean, onDone: () -> Unit = {}) {
+    viewModelScope.launch {
+      repository.updateTrustedContactSettings(name, phone, consent)
+        .onSuccess {
+          _statusMessage.value = "Trusted contact safety settings saved."
+          onDone()
+        }
+        .onFailure { _statusMessage.value = it.localizedMessage ?: "Could not save trusted contact" }
+    }
+  }
+
+  fun recordLevel1PhoneVerified(verifiedPhoneNumber: String) {
+    viewModelScope.launch {
+      repository.recordLevel1PhoneVerified(verifiedPhoneNumber)
+        .onSuccess {
+          _statusMessage.value = "Level 1 verified! Phone number verified with OTP."
+        }
+        .onFailure { _statusMessage.value = it.localizedMessage ?: "Could not save phone verification" }
+    }
+  }
+
+  fun submitLevel2LiveSelfie(selfiePhotoData: String, onDone: () -> Unit = {}) {
+    viewModelScope.launch {
+      repository.submitLevel2LiveSelfie(selfiePhotoData)
+        .onSuccess {
+          _statusMessage.value = "Live selfie submitted for Level 2 admin review."
+          onDone()
+        }
+        .onFailure { _statusMessage.value = it.localizedMessage ?: "Could not submit live selfie" }
     }
   }
 
@@ -557,7 +614,7 @@ class FriendsHubViewModel(
   }
 
   // ---------------------------------------------------------------------------
-  // Meetups
+  // Meetups & Safety Check-In Policy
   // ---------------------------------------------------------------------------
   fun proposeMeetup(
     connection: Connection,
@@ -567,11 +624,24 @@ class FriendsHubViewModel(
     locationName: String,
     area: String,
     notes: String,
+    scheduledAtMillis: Long = System.currentTimeMillis() + 60 * 60_000L,
+    shareWithTrustedContact: Boolean = false,
     onDone: () -> Unit = {},
   ) {
     val myName = (myProfileState.value as? UiState.Success)?.data?.firstName ?: "Friend"
     viewModelScope.launch {
-      repository.proposeMeetup(connection, myName, activity, dateText, timeText, locationName, area, notes)
+      repository.proposeMeetup(
+        connection = connection,
+        myName = myName,
+        activity = activity,
+        scheduledDateText = dateText,
+        scheduledTimeText = timeText,
+        publicLocationName = locationName,
+        publicArea = area,
+        notes = notes,
+        scheduledAtMillis = scheduledAtMillis,
+        sharedWithTrustedContact = shareWithTrustedContact,
+      )
         .onSuccess {
           _statusMessage.value = "Meetup invitation sent!"
           onDone()
@@ -586,6 +656,35 @@ class FriendsHubViewModel(
       repository.confirmMeetup(meetup, myName)
         .onSuccess { _statusMessage.value = "Meetup confirmed!" }
         .onFailure { _statusMessage.value = it.localizedMessage ?: "Could not confirm meetup" }
+    }
+  }
+
+  fun markMeetupSharedWithTrustedContact(meetup: Meetup) {
+    viewModelScope.launch {
+      repository.markMeetupSharedWithTrustedContact(meetup)
+        .onSuccess { _statusMessage.value = "Meetup plan marked as shared with your trusted contact." }
+        .onFailure { _statusMessage.value = it.localizedMessage ?: "Could not update meetup sharing" }
+    }
+  }
+
+  fun checkInMeetup(meetup: Meetup) {
+    viewModelScope.launch {
+      repository.checkInMeetup(meetup)
+        .onSuccess { _statusMessage.value = "Checked in at ${meetup.publicLocationName}. Stay safe!" }
+        .onFailure { _statusMessage.value = it.localizedMessage ?: "Check-in failed" }
+    }
+  }
+
+  fun markMeetupSafe(meetup: Meetup) {
+    viewModelScope.launch {
+      repository.markMeetupSafe(meetup)
+        .onSuccess {
+          if (_missedCheckInAlertMeetup.value?.id == meetup.id) {
+            _missedCheckInAlertMeetup.value = null
+          }
+          _statusMessage.value = "Glad you're safe! Meetup marked complete."
+        }
+        .onFailure { _statusMessage.value = it.localizedMessage ?: "Could not mark safe" }
     }
   }
 
@@ -606,6 +705,56 @@ class FriendsHubViewModel(
     }
   }
 
+  /**
+   * Evaluates confirmed/proposed meetups against their scheduled start time:
+   * - After 5 minutes past scheduled time without Check In or "I'm Safe": sends a safety reminder.
+   * - After 15 minutes past scheduled time without Check In or "I'm Safe" (if user consent is ON):
+   *   triggers the missed check-in alert for their selected Trusted Contact.
+   */
+  fun evaluateMissedMeetupCheckIns(context: Context, nowMillis: Long = System.currentTimeMillis()) {
+    val account = (accountState.value as? UiState.Success)?.data ?: return
+    val profile = (myProfileState.value as? UiState.Success)?.data ?: return
+    val activeMeetups = meetups.value.filter { it.status == "CONFIRMED" && it.scheduledAtMillis > 0L }
+
+    activeMeetups.forEach { meetup ->
+      if (meetup.isCheckedInBy(currentUserId) || meetup.isMarkedSafeBy(currentUserId)) return@forEach
+
+      val elapsedSinceStart = nowMillis - meetup.scheduledAtMillis
+      if (elapsedSinceStart >= REMINDER_GRACE_MILLIS && !meetup.hasReminderSentTo(currentUserId)) {
+        viewModelScope.launch {
+          repository.recordMissedCheckInReminder(meetup, profile.firstName)
+          SafetyNotificationHelper.showCheckInReminderNotification(context, meetup)
+          _statusMessage.value = "Safety check-in reminder: Tap Check In or I'm Safe for ${meetup.publicLocationName}."
+        }
+      }
+
+      val hasConsent = account.trustedContactConsent || meetup.isSharedWithTrustedBy(currentUserId)
+      if (
+        hasConsent &&
+        account.hasTrustedContact() &&
+        elapsedSinceStart >= ESCALATION_GRACE_MILLIS &&
+        !meetup.hasTrustedAlertTriggeredFor(currentUserId)
+      ) {
+        viewModelScope.launch {
+          repository.recordTrustedContactAlert(
+            meetup = meetup,
+            myName = profile.firstName,
+            trustedContactName = account.trustedContactName,
+          )
+          SafetyNotificationHelper.showTrustedContactAlertNotification(
+            context = context,
+            meetup = meetup,
+            myName = profile.firstName,
+            trustedContactName = account.trustedContactName,
+            trustedContactPhone = account.trustedContactPhone,
+            liveCityArea = _viewerCityArea.value ?: profile.cityArea,
+          )
+          _missedCheckInAlertMeetup.value = meetup
+        }
+      }
+    }
+  }
+
   // ---------------------------------------------------------------------------
   // Voice Calling (WebRTC + Firestore Signaling)
   // ---------------------------------------------------------------------------
@@ -614,6 +763,11 @@ class FriendsHubViewModel(
     val calleeUid = connection.otherUid(currentUserId)
     val calleeName = connection.otherName(currentUserId)
     val participants = listOf(currentUserId, calleeUid)
+
+    if (calleeUid in allBlockedUids.value) {
+      _statusMessage.value = "Blocked users cannot call each other."
+      return
+    }
 
     viewModelScope.launch {
       val calleeProfile = repository.getProfileById(calleeUid).getOrNull()
@@ -633,7 +787,6 @@ class FriendsHubViewModel(
       val engine = callEngineFactory(context.applicationContext)
       callEngine = engine
 
-      // Buffer local ICE candidates until call document ID exists
       val bufferedCandidates = mutableListOf<Triple<String, Int, String>>()
       var createdCallId: String? = null
 
@@ -932,5 +1085,7 @@ class FriendsHubViewModel(
   private companion object {
     const val TAG = "FriendsHubVM"
     const val STOP_TIMEOUT_MS = 5000L
+    const val REMINDER_GRACE_MILLIS = 5 * 60_000L
+    const val ESCALATION_GRACE_MILLIS = 15 * 60_000L
   }
 }

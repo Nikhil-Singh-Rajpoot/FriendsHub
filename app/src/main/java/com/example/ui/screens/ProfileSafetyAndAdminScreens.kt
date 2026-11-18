@@ -3,6 +3,8 @@ package com.example.ui.screens
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -14,10 +16,13 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
@@ -25,13 +30,16 @@ import androidx.compose.material.icons.automirrored.rounded.Logout
 import androidx.compose.material.icons.rounded.AddAPhoto
 import androidx.compose.material.icons.rounded.AdminPanelSettings
 import androidx.compose.material.icons.rounded.Block
+import androidx.compose.material.icons.rounded.ContactPhone
 import androidx.compose.material.icons.rounded.DeleteForever
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.MyLocation
 import androidx.compose.material.icons.rounded.Notifications
 import androidx.compose.material.icons.rounded.Policy
 import androidx.compose.material.icons.rounded.Settings
+import androidx.compose.material.icons.rounded.Sos
 import androidx.compose.material.icons.rounded.Verified
+import androidx.compose.material.icons.rounded.VerifiedUser
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -59,8 +67,12 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.example.data.model.ActivityCategory
 import com.example.data.model.AppNotification
@@ -72,12 +84,13 @@ import com.example.ui.components.EmptyIllustrationCard
 import com.example.ui.components.ProfileAvatar
 import com.example.ui.components.StatusPill
 import com.example.ui.components.VerificationBadge
+import com.example.ui.theme.AmberContainer
+import com.example.ui.theme.AmberWarm
 import com.example.ui.theme.CobaltBlue
 import com.example.ui.theme.CoralAlert
 import com.example.ui.theme.CoralContainer
 import com.example.ui.theme.EmeraldContainer
 import com.example.ui.theme.EmeraldOnline
-import androidx.compose.foundation.layout.size
 import com.example.util.ImageUtils
 import com.example.util.LocationPrivacy
 import kotlinx.coroutines.launch
@@ -105,6 +118,8 @@ fun ProfileScreen(
   onOpenTerms: () -> Unit,
   onSignOut: () -> Unit,
   onDeleteAccount: () -> Unit,
+  onOpenVerification: () -> Unit = {},
+  onOpenEmergencyHelp: () -> Unit = {},
   modifier: Modifier = Modifier,
 ) {
   val context = LocalContext.current
@@ -218,14 +233,37 @@ fun ProfileScreen(
             containerColor = EmeraldContainer,
             contentColor = EmeraldOnline,
           )
+          if (profile.phoneVerified || account?.phoneVerified == true) {
+            StatusPill(
+              text = "Level 1 OTP",
+              containerColor = EmeraldContainer,
+              contentColor = EmeraldOnline,
+            )
+          }
+          if (profile.selfieStatus == "PENDING" && !profile.isVerified) {
+            StatusPill(
+              text = "Level 2 Selfie Pending",
+              containerColor = AmberContainer,
+              contentColor = AmberWarm,
+            )
+          }
         }
         if (!profile.isVerified) {
-          Spacer(modifier = Modifier.height(6.dp))
+          Spacer(modifier = Modifier.height(8.dp))
           Text(
-            text = "Pending admin verification. Verified accounts show a blue tick.",
+            text = "Complete Level 1 (Phone OTP) & Level 2 (Live Selfie) verification to connect with members.",
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
           )
+          Spacer(modifier = Modifier.height(8.dp))
+          Button(
+            onClick = onOpenVerification,
+            modifier = Modifier.fillMaxWidth().height(48.dp).testTag("profile_verify_identity_button"),
+          ) {
+            Icon(Icons.Rounded.VerifiedUser, contentDescription = null)
+            Spacer(modifier = Modifier.width(6.dp))
+            Text("Verify Identity (Level 1 & 2)")
+          }
         }
         if (editing) {
           Spacer(modifier = Modifier.height(12.dp))
@@ -355,8 +393,18 @@ fun ProfileScreen(
       }
     }
 
+    ProfileMenuItem(
+      Icons.Rounded.VerifiedUser,
+      "Identity Verification (Level 1 & 2)",
+      onClick = onOpenVerification,
+    )
+    ProfileMenuItem(
+      Icons.Rounded.Sos,
+      "Emergency Help & Safety Center",
+      onClick = onOpenEmergencyHelp,
+    )
     ProfileMenuItem(Icons.Rounded.Notifications, "Notifications", onClick = onOpenNotifications)
-    ProfileMenuItem(Icons.Rounded.Settings, "Notification & Privacy Settings", onClick = onOpenSettings)
+    ProfileMenuItem(Icons.Rounded.Settings, "Trusted Contact & Privacy Settings", onClick = onOpenSettings)
     ProfileMenuItem(Icons.Rounded.Block, "Blocked Users", onClick = onOpenBlockedUsers)
     ProfileMenuItem(Icons.Rounded.Policy, "Privacy Policy", onClick = onOpenPrivacy)
     ProfileMenuItem(Icons.Rounded.Policy, "Terms & Community Guidelines", onClick = onOpenTerms)
@@ -495,11 +543,16 @@ fun SettingsScreen(
   account: UserAccount?,
   onBack: () -> Unit,
   onSavePrefs: (push: Boolean, calls: Boolean, meetups: Boolean) -> Unit,
+  onSaveTrustedContact: (name: String, phone: String, consent: Boolean) -> Unit = { _, _, _ -> },
   onOpenAdminGate: () -> Unit = {},
 ) {
   var push by remember(account?.pushNotificationsEnabled) { mutableStateOf(account?.pushNotificationsEnabled ?: true) }
   var calls by remember(account?.callAlertsEnabled) { mutableStateOf(account?.callAlertsEnabled ?: true) }
   var meetups by remember(account?.meetupRemindersEnabled) { mutableStateOf(account?.meetupRemindersEnabled ?: true) }
+
+  var trustedName by remember(account?.trustedContactName) { mutableStateOf(account?.trustedContactName.orEmpty()) }
+  var trustedPhone by remember(account?.trustedContactPhone) { mutableStateOf(account?.trustedContactPhone.orEmpty()) }
+  var trustedConsent by remember(account?.trustedContactConsent) { mutableStateOf(account?.trustedContactConsent ?: false) }
 
   Scaffold(
     topBar = {
@@ -514,7 +567,11 @@ fun SettingsScreen(
     },
   ) { innerPadding ->
     Column(
-      modifier = Modifier.fillMaxSize().padding(innerPadding).padding(20.dp),
+      modifier =
+        Modifier.fillMaxSize()
+          .padding(innerPadding)
+          .verticalScroll(rememberScrollState())
+          .padding(20.dp),
       verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
       Card(
@@ -533,13 +590,67 @@ fun SettingsScreen(
             Switch(checked = calls, onCheckedChange = { calls = it; onSavePrefs(push, it, meetups) })
           }
           Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
-            Text("Meetup Reminders")
+            Text("Meetup Check-In Reminders")
             Switch(checked = meetups, onCheckedChange = { meetups = it; onSavePrefs(push, calls, it) })
           }
         }
       }
 
-      Spacer(modifier = Modifier.weight(1f))
+      // Trusted Contact & Consent card
+      Card(
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        shape = MaterialTheme.shapes.large,
+        modifier = Modifier.fillMaxWidth().testTag("trusted_contact_settings_card"),
+      ) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+          Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Icon(Icons.Rounded.ContactPhone, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+            Text("Trusted Safety Contact", style = MaterialTheme.typography.titleMedium)
+          }
+          Text(
+            text = "Saved privately on your account so you can share meetup plans or prepare an alert if a check-in is missed.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
+          OutlinedTextField(
+            value = trustedName,
+            onValueChange = { trustedName = it },
+            label = { Text("Trusted Contact Name") },
+            placeholder = { Text("e.g., Priya (Sister)") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth().testTag("trusted_contact_name_input"),
+          )
+          OutlinedTextField(
+            value = trustedPhone,
+            onValueChange = { trustedPhone = it },
+            label = { Text("Trusted Contact Phone") },
+            placeholder = { Text("+919876543210") },
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth().testTag("trusted_contact_phone_input"),
+          )
+          Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
+            Text(
+              text = "Alert trusted contact on missed meetup check-in",
+              style = MaterialTheme.typography.bodyMedium,
+              modifier = Modifier.weight(1f),
+            )
+            Switch(
+              checked = trustedConsent,
+              onCheckedChange = { trustedConsent = it },
+              modifier = Modifier.testTag("trusted_contact_consent_switch"),
+            )
+          }
+          Button(
+            onClick = { onSaveTrustedContact(trustedName, trustedPhone, trustedConsent) },
+            modifier = Modifier.fillMaxWidth().height(48.dp).testTag("save_trusted_contact_button"),
+          ) {
+            Text("Save Trusted Contact")
+          }
+        }
+      }
+
+      Spacer(modifier = Modifier.height(12.dp))
       TextButton(
         onClick = onOpenAdminGate,
         modifier = Modifier.align(Alignment.CenterHorizontally).testTag("admin_gate_button"),
@@ -683,18 +794,18 @@ fun LegalInfoScreen(
         Text("FriendsHub Privacy Policy", style = MaterialTheme.typography.headlineSmall)
         Text(
           "1. Purpose & Consent: FriendsHub collects only the minimum information required for short-term friendship discovery among verified adults 18+ in India (DPDP Act aligned).\n\n" +
-            "2. Location Privacy: GPS coordinates are quantized on-device to approximate ~500m cells and stored only while your availability toggle is ON. Exact GPS coordinates and residential addresses are never shared.\n\n" +
-            "3. Private Communications: Personal phone numbers and emails are strictly isolated and never exposed to other members. In-app voice calls use peer-to-peer WebRTC signaling gated to active connections.\n\n" +
+            "2. Location Privacy: GPS coordinates are quantized on-device to approximate ~220m cells and stored only while your availability toggle is ON. Exact GPS coordinates and residential addresses are never shared.\n\n" +
+            "3. Identity & Trusted Contacts: Verified mobile numbers, live verification selfies, and emergency trusted contact details are strictly private and never shared with other users.\n\n" +
             "4. Account Deletion: You can permanently delete your profile and account data at any time from the Profile tab.",
           style = MaterialTheme.typography.bodyLarge,
         )
       } else {
-        Text("FriendsHub Terms & Safety Guidelines", style = MaterialTheme.typography.headlineSmall)
+        Text("FriendsHub Meeting Safety Policy & Guidelines", style = MaterialTheme.typography.headlineSmall)
         Text(
-          "1. Adults 18+ Only: You must be at least 18 years old to register and use FriendsHub.\n\n" +
-            "2. Friendship Only: FriendsHub is a platonic social companionship platform for tea, coffee, meals, walks, and conversation — not a dating or solicitation service.\n\n" +
-            "3. Public Meetups: Always meet new connections in well-lit public venues such as cafes, malls, or parks.\n\n" +
-            "4. Zero Tolerance: Harassment, impersonation, spam, or unsafe behavior results in immediate suspension.",
+          "1. Adults 18+ & Verified Connections Only: Only verified members (Level 1 Phone OTP + Level 2 Live Selfie approved) can send or receive connection requests.\n\n" +
+            "2. Public, Busy Meeting Places Only: Always choose crowded, well-lit public cafes, malls, or parks.\n\n" +
+            "3. Trusted Contact & Safety Check-Ins: Share your meetup plan with a trusted contact, check in on arrival, and tap \"I'm Safe\" afterward. Missed check-ins send a reminder and then alert your trusted contact per your consent.\n\n" +
+            "4. Strict Blocking & Zero Tolerance: Blocked users cannot discover, contact, or call each other.",
           style = MaterialTheme.typography.bodyLarge,
         )
       }
@@ -702,7 +813,7 @@ fun LegalInfoScreen(
   }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun AdminModerationScreen(
   currentSignedInEmail: String,
@@ -865,15 +976,16 @@ fun AdminModerationScreen(
           }
         }
 
-        item { Text("Registered Members", style = MaterialTheme.typography.titleLarge) }
+        item { Text("Registered Members & Identity Review", style = MaterialTheme.typography.titleLarge) }
         items(snapshot.profiles, key = { it.uid }) { prof ->
           val suspended = prof.accountStatus == "SUSPENDED"
+          val selfieBitmap = remember(prof.selfiePhotoData) { ImageUtils.decodePhotoData(prof.selfiePhotoData) }
           Card(
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
             shape = MaterialTheme.shapes.medium,
             modifier = Modifier.fillMaxWidth(),
           ) {
-            Column(modifier = Modifier.padding(14.dp)) {
+            Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
               Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
                 Column(modifier = Modifier.weight(1f)) {
                   Row(
@@ -885,18 +997,43 @@ fun AdminModerationScreen(
                   }
                   Text(prof.cityArea, style = MaterialTheme.typography.bodyMedium)
                 }
+                if (selfieBitmap != null) {
+                  Image(
+                    bitmap = selfieBitmap.asImageBitmap(),
+                    contentDescription = "Live verification selfie for ${prof.firstName}",
+                    contentScale = ContentScale.Crop,
+                    modifier =
+                      Modifier.size(56.dp)
+                        .clip(CircleShape)
+                        .border(2.dp, CobaltBlue, CircleShape),
+                  )
+                }
+                Spacer(modifier = Modifier.width(6.dp))
                 StatusPill(
                   text = prof.accountStatus,
                   containerColor = if (suspended) CoralContainer else EmeraldContainer,
                   contentColor = if (suspended) CoralAlert else EmeraldOnline,
                 )
               }
-              Spacer(modifier = Modifier.height(8.dp))
+
+              FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                StatusPill(
+                  text = if (prof.phoneVerified) "L1 Phone Verified" else "L1 Pending",
+                  containerColor = if (prof.phoneVerified) EmeraldContainer else AmberContainer,
+                  contentColor = if (prof.phoneVerified) EmeraldOnline else AmberWarm,
+                )
+                StatusPill(
+                  text = "L2 Selfie: ${prof.selfieStatus}",
+                  containerColor = if (prof.selfieVerified) EmeraldContainer else AmberContainer,
+                  contentColor = if (prof.selfieVerified) EmeraldOnline else AmberWarm,
+                )
+              }
+
               Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(onClick = { onToggleVerified(prof.uid, !prof.isVerified) }) {
                   Icon(Icons.Rounded.Verified, contentDescription = null)
                   Spacer(modifier = Modifier.width(4.dp))
-                  Text(if (prof.isVerified) "Unverify" else "Verify")
+                  Text(if (prof.isVerified) "Unverify" else "Approve & Verify")
                 }
                 Button(
                   onClick = { onToggleSuspend(prof.uid, !suspended) },

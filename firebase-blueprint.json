@@ -2,13 +2,18 @@
   "entities": {
     "UserAccount": {
       "title": "UserAccount",
-      "description": "Private user account, 18+ age verification, role, and notification preferences.",
+      "description": "Private user account, 18+ age verification, phone verification, trusted contact settings, role, and notification preferences.",
       "type": "object",
       "properties": {
         "uid": { "type": "string", "description": "Firebase Auth UID" },
         "displayName": { "type": "string", "description": "Full display name" },
         "email": { "type": "string", "description": "Account email" },
         "phoneNote": { "type": "string", "description": "Private optional phone reference" },
+        "verifiedPhoneNumber": { "type": "string", "description": "OTP-verified E.164 phone number" },
+        "phoneVerified": { "type": "boolean", "description": "Level 1 OTP phone verification completed" },
+        "trustedContactName": { "type": "string", "description": "Emergency trusted contact name" },
+        "trustedContactPhone": { "type": "string", "description": "Emergency trusted contact phone number" },
+        "trustedContactConsent": { "type": "boolean", "description": "User consent to alert trusted contact on missed check-in" },
         "dateOfBirthMillis": { "type": "integer", "description": "UTC epoch millis of birth date" },
         "isAdultVerified": { "type": "boolean", "description": "Confirmed 18+ years old" },
         "accountStatus": { "type": "string", "enum": ["ACTIVE", "SUSPENDED"] },
@@ -24,7 +29,7 @@
     },
     "UserProfile": {
       "title": "UserProfile",
-      "description": "Public discovery profile without PII or exact GPS coordinates.",
+      "description": "Public discovery profile without PII or exact GPS coordinates, plus Level 1 & Level 2 verification status.",
       "type": "object",
       "properties": {
         "uid": { "type": "string" },
@@ -36,6 +41,10 @@
         "photoData": { "type": "string" },
         "interests": { "type": "array" },
         "isVerified": { "type": "boolean" },
+        "phoneVerified": { "type": "boolean" },
+        "selfieVerified": { "type": "boolean" },
+        "selfieStatus": { "type": "string", "enum": ["NONE", "PENDING", "APPROVED", "REJECTED"] },
+        "selfiePhotoData": { "type": "string" },
         "isAvailable": { "type": "boolean" },
         "preferredActivity": { "type": "string" },
         "availabilityDurationMinutes": { "type": "integer" },
@@ -68,7 +77,7 @@
     },
     "ConnectionRequest": {
       "title": "ConnectionRequest",
-      "description": "Invitation sent from one user to another for a shared activity.",
+      "description": "Invitation sent from one verified user to another verified user for a shared activity.",
       "type": "object",
       "properties": {
         "fromUid": { "type": "string" },
@@ -108,7 +117,7 @@
     },
     "Meetup": {
       "title": "Meetup",
-      "description": "Public place meetup proposal between two connected users.",
+      "description": "Public place meetup proposal between two connected users with arrival check-in, safe confirmation, and missed check-in escalation tracking.",
       "type": "object",
       "properties": {
         "connectionId": { "type": "string" },
@@ -120,12 +129,22 @@
         "activity": { "type": "string" },
         "scheduledDateText": { "type": "string" },
         "scheduledTimeText": { "type": "string" },
+        "scheduledAtMillis": { "type": "integer" },
         "publicLocationName": { "type": "string" },
         "publicArea": { "type": "string" },
         "notes": { "type": "string" },
         "status": { "type": "string", "enum": ["PROPOSED", "CONFIRMED", "CANCELLED", "COMPLETED"] },
         "confirmedByUid": { "type": "string" },
         "cancelledByUid": { "type": "string" },
+        "sharedWithTrustedContactUids": { "type": "array" },
+        "checkedInUids": { "type": "array" },
+        "checkedInAtMillis": { "type": "integer" },
+        "safeUids": { "type": "array" },
+        "safeMarkedAtMillis": { "type": "integer" },
+        "reminderSentUids": { "type": "array" },
+        "reminderSentAtMillis": { "type": "integer" },
+        "trustedAlertUids": { "type": "array" },
+        "trustedAlertSentAtMillis": { "type": "integer" },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
@@ -199,7 +218,7 @@
     },
     "AppNotification": {
       "title": "AppNotification",
-      "description": "In-app notification item for requests, calls, and meetups.",
+      "description": "In-app notification item for requests, calls, meetups, and safety check-in alerts.",
       "type": "object",
       "properties": {
         "recipientUid": { "type": "string" },
@@ -218,11 +237,11 @@
   "firestore": {
     "/users/{userId}": {
       "schema": { "$ref": "#/entities/UserAccount" },
-      "description": "Private user account, DOB verification, preferences, and moderation role."
+      "description": "Private user account, DOB verification, phone verification, trusted contact config, and moderation role."
     },
     "/user_profiles/{userId}": {
       "schema": { "$ref": "#/entities/UserProfile" },
-      "description": "Public-safe discovery profiles with coarse grid coordinates and interests."
+      "description": "Public-safe discovery profiles with coarse grid coordinates, interests, and verification status."
     },
     "/availability_sessions/{sessionId}": {
       "schema": { "$ref": "#/entities/AvailabilitySession" },
@@ -230,7 +249,7 @@
     },
     "/connection_requests/{requestId}": {
       "schema": { "$ref": "#/entities/ConnectionRequest" },
-      "description": "Connection requests between two users."
+      "description": "Connection requests between verified users."
     },
     "/connections/{connectionId}": {
       "schema": { "$ref": "#/entities/Connection" },
@@ -238,7 +257,7 @@
     },
     "/meetups/{meetupId}": {
       "schema": { "$ref": "#/entities/Meetup" },
-      "description": "Planned public-location meetups between connected users."
+      "description": "Planned public-location meetups between connected users with safety check-ins."
     },
     "/calls/{callId}": {
       "schema": { "$ref": "#/entities/VoiceCall" },

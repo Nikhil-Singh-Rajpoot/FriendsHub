@@ -2,7 +2,11 @@ package com.example.util
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.os.Looper
 import com.example.data.model.PublicMeetupSpot
+import com.google.android.gms.location.LocationCallback
+import com.google.android.gms.location.LocationRequest
+import com.google.android.gms.location.LocationResult
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
 import com.google.android.gms.tasks.CancellationTokenSource
@@ -14,16 +18,20 @@ import kotlin.math.cos
 import kotlin.math.round
 import kotlin.math.sin
 import kotlin.math.sqrt
+import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 
 object LocationPrivacy {
 
   /**
-   * Quantizes GPS coordinates to ~550m grid cells (0.005 degrees) before storing in Firestore
-   * so exact user coordinates or home addresses are never stored or exposed.
+   * Quantizes GPS coordinates to ~220m grid cells (0.002 degrees) before storing in Firestore
+   * so exact street/home coordinates are never stored while avoiding large boundary drift.
    */
   fun quantizeCoordinate(value: Double): Double {
-    return round(value * 200.0) / 200.0
+    return round(value * 500.0) / 500.0
   }
 
   /** Computes Haversine distance in kilometers between two approximate coordinates. */
@@ -202,11 +210,12 @@ object LocationPrivacy {
     blockedUids: Set<String>,
     radius: com.example.data.model.RadiusFilter,
     activityFilter: String?,
+    viewerCityArea: String = myProfile?.cityArea.orEmpty(),
   ): List<com.example.data.model.NearbyUserCardModel> {
     val effectiveLat = if (viewerLat != 0.0 || viewerLng != 0.0) viewerLat else (myProfile?.approxLat ?: 0.0)
     val effectiveLng = if (viewerLat != 0.0 || viewerLng != 0.0) viewerLng else (myProfile?.approxLng ?: 0.0)
     val viewerHasCoords = effectiveLat != 0.0 || effectiveLng != 0.0
-    val myCityArea = myProfile?.cityArea.orEmpty()
+    val myCityArea = viewerCityArea.ifBlank { if (viewerHasCoords) "" else myProfile?.cityArea.orEmpty() }
     val myInterests = myProfile?.interests?.toSet().orEmpty()
 
     return candidates
@@ -260,39 +269,56 @@ object LocationPrivacy {
     val cityArea: String,
     val approxLat: Double,
     val approxLng: Double,
+    val rawLat: Double = approxLat,
+    val rawLng: Double = approxLng,
   )
 
-  private fun hasLocationPermission(context: Context): Boolean {
-    val hasCoarse =
-      androidx.core.content.ContextCompat.checkSelfPermission(
-        context,
-        android.Manifest.permission.ACCESS_COARSE_LOCATION,
-      ) == android.content.pm.PackageManager.PERMISSION_GRANTED
-    val hasFine =
-      androidx.core.content.ContextCompat.checkSelfPermission(
-        context,
-        android.Manifest.permission.ACCESS_FINE_LOCATION,
-      ) == android.content.pm.PackageManager.PERMISSION_GRANTED
-    return hasCoarse || hasFine
+  fun hasLocationPermission(context: Context): Boolean {
+    return hasFineLocationPermission(context) || hasCoarseLocationPermission(context)
+  }
+
+  private fun hasFineLocationPermission(context: Context): Boolean {
+    return androidx.core.content.ContextCompat.checkSelfPermission(
+      context,
+      android.Manifest.permission.ACCESS_FINE_LOCATION,
+    ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+  }
+
+  private fun hasCoarseLocationPermission(context: Context): Boolean {
+    return androidx.core.content.ContextCompat.checkSelfPermission(
+      context,
+      android.Manifest.permission.ACCESS_COARSE_LOCATION,
+    ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+  }
+
+  private fun preferredLocationPriority(context: Context): Int {
+    return if (hasFineLocationPermission(context)) {
+      Priority.PRIORITY_HIGH_ACCURACY
+    } else {
+      Priority.PRIORITY_BALANCED_POWER_ACCURACY
+    }
   }
 
   @SuppressLint("MissingPermission")
-  private suspend fun fetchRawDeviceLocation(context: Context): Pair<Double, Double>? {
+  suspend fun fetchRawDeviceLocation(context: Context): Pair<Double, Double>? {
     if (!hasLocationPermission(context)) return null
 
     val client = LocationServices.getFusedLocationProviderClient(context.applicationContext)
+    val priority = preferredLocationPriority(context)
     return suspendCancellableCoroutine { cont ->
       val cts = CancellationTokenSource()
       cont.invokeOnCancellation { cts.cancel() }
       client
-        .getCurrentLocation(Priority.PRIORITY_BALANCED_POWER_ACCURACY, cts.token)
+        .getCurrentLocation(priority, cts.token)
         .addOnSuccessListener { location ->
           if (location != null) {
             cont.resume(location.latitude to location.longitude)
           } else {
             client.lastLocation
               .addOnSuccessListener { last ->
-                if (last != null) {
+                val maxAgeMillis = 3 * 60_000L
+                val isFresh = last != null && (System.currentTimeMillis() - last.time) <= maxAgeMillis
+                if (isFresh && last != null) {
                   cont.resume(last.latitude to last.longitude)
                 } else {
                   cont.resume(null)
@@ -319,7 +345,67 @@ object LocationPrivacy {
       cityArea = cityArea,
       approxLat = qLat,
       approxLng = qLng,
+      rawLat = raw.first,
+      rawLng = raw.second,
     )
+  }
+
+  @SuppressLint("MissingPermission")
+  fun observeLiveLocations(context: Context): Flow<DetectedLocationAddress> = callbackFlow {
+    val appContext = context.applicationContext
+    if (!hasLocationPermission(appContext)) {
+      close()
+      return@callbackFlow
+    }
+
+    val client = LocationServices.getFusedLocationProviderClient(appContext)
+    var lastGeocodedCoords: Pair<Double, Double>? = null
+    var lastGeocodedCityArea = ""
+
+    suspend fun emitAddress(lat: Double, lng: Double) {
+      val movedFarEnough =
+        lastGeocodedCoords == null ||
+          distanceKm(lastGeocodedCoords!!.first, lastGeocodedCoords!!.second, lat, lng) >= 0.4
+      if (movedFarEnough || lastGeocodedCityArea.isBlank()) {
+        val resolved = reverseGeocodeCityArea(appContext, lat, lng).orEmpty()
+        if (resolved.isNotBlank()) {
+          lastGeocodedCityArea = resolved
+          lastGeocodedCoords = lat to lng
+        }
+      }
+      trySend(
+        DetectedLocationAddress(
+          cityArea = lastGeocodedCityArea,
+          approxLat = quantizeCoordinate(lat),
+          approxLng = quantizeCoordinate(lng),
+          rawLat = lat,
+          rawLng = lng,
+        )
+      )
+    }
+
+    launch {
+      fetchRawDeviceLocation(appContext)?.let { (lat, lng) ->
+        emitAddress(lat, lng)
+      }
+    }
+
+    val request =
+      LocationRequest.Builder(preferredLocationPriority(appContext), 20_000L)
+        .setMinUpdateIntervalMillis(10_000L)
+        .setMinUpdateDistanceMeters(150f)
+        .build()
+
+    val callback =
+      object : LocationCallback() {
+        override fun onLocationResult(result: LocationResult) {
+          val loc = result.lastLocation ?: return
+          launch { emitAddress(loc.latitude, loc.longitude) }
+        }
+      }
+
+    client.requestLocationUpdates(request, callback, Looper.getMainLooper())
+    awaitClose { client.removeLocationUpdates(callback) }
   }
 
   private fun formatAddressToCityArea(address: android.location.Address?): String {

@@ -44,6 +44,7 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -62,7 +63,10 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.credentials.CredentialManager
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.ViewModelProvider.AndroidViewModelFactory.Companion.APPLICATION_KEY
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
@@ -270,6 +274,7 @@ private fun AuthenticatedAppShell(
   val statusMessage by viewModel.statusMessage.collectAsStateWithLifecycle()
   val callBlockedNotice by viewModel.callBlockedNotice.collectAsStateWithLifecycle()
   val viewerLocation by viewModel.viewerLocation.collectAsStateWithLifecycle()
+  val viewerCityArea by viewModel.viewerCityArea.collectAsStateWithLifecycle()
   val peerProfiles by viewModel.peerProfiles.collectAsStateWithLifecycle()
   val adminSnapshot by viewModel.adminSnapshot.collectAsStateWithLifecycle()
   val adminLoading by viewModel.adminLoading.collectAsStateWithLifecycle()
@@ -361,8 +366,27 @@ private fun AuthenticatedAppShell(
   var activeSubScreen by remember { mutableStateOf<SubScreen?>(null) }
   var quickConnectTarget by remember { mutableStateOf<UserProfile?>(null) }
 
-  LaunchedEffect(myProfile.uid) {
-    viewModel.refreshViewerLocation(context)
+  val lifecycleOwner = LocalLifecycleOwner.current
+  DisposableEffect(lifecycleOwner, myProfile.uid) {
+    val observer = LifecycleEventObserver { _, event ->
+      when (event) {
+        Lifecycle.Event.ON_RESUME -> viewModel.startLiveLocationUpdates(context)
+        Lifecycle.Event.ON_STOP -> viewModel.stopLiveLocationUpdates()
+        else -> Unit
+      }
+    }
+    lifecycleOwner.lifecycle.addObserver(observer)
+    viewModel.startLiveLocationUpdates(context)
+    onDispose {
+      lifecycleOwner.lifecycle.removeObserver(observer)
+      viewModel.stopLiveLocationUpdates()
+    }
+  }
+
+  LaunchedEffect(currentTab) {
+    if (currentTab == MainTab.HOME || currentTab == MainTab.DISCOVER) {
+      viewModel.startLiveLocationUpdates(context)
+    }
   }
 
   if (activeSubScreen != null) {
@@ -585,7 +609,9 @@ private fun AuthenticatedAppShell(
                   upcomingMeetups = upcomingMeetups,
                   unreadNotifications = unreadNotifications,
                   radiusFilter = radiusFilter,
+                  liveCityArea = viewerCityArea ?: myProfile.cityArea,
                   isEnablingAvailability = isEnablingAvailability,
+                  onRefreshLocation = { viewModel.refreshViewerLocation(context, showFeedback = true) },
                   onEnableAvailability = { act, dur -> viewModel.turnOnAvailability(context, act, dur) },
                   onUpdateLiveActivity = { act -> viewModel.updateLiveActivity(act) },
                   onDisableAvailability = { viewModel.turnOffAvailability() },
@@ -608,6 +634,9 @@ private fun AuthenticatedAppShell(
                   radiusFilter = radiusFilter,
                   activityFilter = activityFilter,
                   myIsAvailable = myProfile.isCurrentlyAvailable(),
+                  liveCityArea = viewerCityArea ?: myProfile.cityArea,
+                  hasLiveGps = viewerLocation != null,
+                  onRefreshLocation = { viewModel.refreshViewerLocation(context, showFeedback = true) },
                   onSelectRadius = { viewModel.setRadiusFilter(it) },
                   onSelectActivity = { viewModel.setActivityFilter(it) },
                   onViewProfile = { activeSubScreen = SubScreen.ProfileDetails(it) },

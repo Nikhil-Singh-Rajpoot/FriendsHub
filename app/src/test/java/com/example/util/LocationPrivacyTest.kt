@@ -9,11 +9,11 @@ import org.junit.Test
 class LocationPrivacyTest {
 
   @Test
-  fun quantizeCoordinate_roundsToApprox550mGrid() {
-    val rawLat = 28.459496
+  fun quantizeCoordinate_roundsToApprox220mGrid() {
+    val rawLat = 28.4581
     val quantized = LocationPrivacy.quantizeCoordinate(rawLat)
-    // 28.459496 * 200 = 5691.8992 -> rounds to 5692 -> / 200 = 28.46
-    assertEquals(28.46, quantized, 0.0001)
+    // 28.4581 * 500 = 14229.05 -> rounds to 14229 -> / 500 = 28.458
+    assertEquals(28.458, quantized, 0.0001)
   }
 
   @Test
@@ -129,5 +129,112 @@ class LocationPrivacyTest {
         activityFilter = null,
       )
     assertEquals(listOf("peer_ggn_near"), withoutGpsCards.map { it.profile.uid })
+  }
+
+  @Test
+  fun buildNearbyUserCards_updatesWhenUserTravelsFromGurugramToNoida() {
+    // User registered in Gurugram (profile still says Gurugram), now physically in Noida
+    val registeredInGurugram =
+      com.example.data.model.UserProfile(
+        uid = "me",
+        firstName = "Nikhil",
+        cityArea = "Sector 22, Gurugram",
+        approxLat = 0.0,
+        approxLng = 0.0,
+      )
+    val gurugramPeerWithCoords =
+      com.example.data.model.UserProfile(
+        uid = "peer_ggn_gps",
+        firstName = "Aarav",
+        cityArea = "Sector 29, Gurugram",
+        approxLat = 28.468,
+        approxLng = 77.062,
+        isAvailable = true,
+      )
+    val gurugramPeerNoCoords =
+      com.example.data.model.UserProfile(
+        uid = "peer_ggn_nogps",
+        firstName = "Sanya",
+        cityArea = "Sector 22, Gurugram",
+        approxLat = 0.0,
+        approxLng = 0.0,
+        isAvailable = true,
+      )
+    val noidaPeerNear =
+      com.example.data.model.UserProfile(
+        uid = "peer_noida_near",
+        firstName = "Riya",
+        cityArea = "Sector 62, Noida",
+        approxLat = 28.628,
+        approxLng = 77.366,
+        isAvailable = true,
+      )
+
+    val cardsInNoida =
+      LocationPrivacy.buildNearbyUserCards(
+        myProfile = registeredInGurugram,
+        viewerLat = 28.627,
+        viewerLng = 77.365,
+        candidates = listOf(gurugramPeerWithCoords, gurugramPeerNoCoords, noidaPeerNear),
+        blockedUids = emptySet(),
+        radius = com.example.data.model.RadiusFilter.KM_5,
+        activityFilter = null,
+        viewerCityArea = "Sector 62, Noida",
+      )
+
+    assertEquals(listOf("peer_noida_near"), cardsInNoida.map { it.profile.uid })
+  }
+
+  @Test
+  fun buildNearbyUserCards_strictlyExcludes8KmPeerUnder5KmFilter() {
+    val personB =
+      com.example.data.model.UserProfile(
+        uid = "person_b",
+        firstName = "PersonB",
+        cityArea = "Sector 22, Gurugram",
+      )
+    // ~8.0 km north-east of (28.500, 77.050): dLat = 0.072 deg ≈ 8.0 km
+    val personA8KmAway =
+      com.example.data.model.UserProfile(
+        uid = "person_a_8km",
+        firstName = "PersonA",
+        cityArea = "Gurugram",
+        approxLat = 28.572,
+        approxLng = 77.050,
+        isAvailable = true,
+      )
+
+    val dist = LocationPrivacy.distanceKm(28.500, 77.050, personA8KmAway.approxLat, personA8KmAway.approxLng)
+    assertTrue("Expected ~8 km distance, got $dist", dist in 7.8..8.2)
+
+    listOf(
+      com.example.data.model.RadiusFilter.KM_1,
+      com.example.data.model.RadiusFilter.KM_3,
+      com.example.data.model.RadiusFilter.KM_5,
+    ).forEach { filter ->
+      val cards =
+        LocationPrivacy.buildNearbyUserCards(
+          myProfile = personB,
+          viewerLat = 28.500,
+          viewerLng = 77.050,
+          candidates = listOf(personA8KmAway),
+          blockedUids = emptySet(),
+          radius = filter,
+          activityFilter = null,
+        )
+      assertTrue("8km peer must NOT appear under ${filter.label}", cards.isEmpty())
+    }
+
+    val cards10Km =
+      LocationPrivacy.buildNearbyUserCards(
+        myProfile = personB,
+        viewerLat = 28.500,
+        viewerLng = 77.050,
+        candidates = listOf(personA8KmAway),
+        blockedUids = emptySet(),
+        radius = com.example.data.model.RadiusFilter.KM_10,
+        activityFilter = null,
+      )
+    assertEquals(listOf("person_a_8km"), cards10Km.map { it.profile.uid })
   }
 }

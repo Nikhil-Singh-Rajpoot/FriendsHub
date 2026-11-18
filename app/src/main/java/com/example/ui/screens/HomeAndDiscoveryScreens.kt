@@ -37,6 +37,7 @@ import androidx.compose.material.icons.rounded.Explore
 import androidx.compose.material.icons.rounded.Flag
 import androidx.compose.material.icons.rounded.Forum
 import androidx.compose.material.icons.rounded.LocationOn
+import androidx.compose.material.icons.rounded.MyLocation
 import androidx.compose.material.icons.rounded.Notifications
 import androidx.compose.material.icons.rounded.PersonAdd
 import androidx.compose.material.icons.rounded.Restaurant
@@ -108,7 +109,9 @@ fun HomeDashboardScreen(
   upcomingMeetups: List<Meetup>,
   unreadNotifications: Int,
   radiusFilter: RadiusFilter = RadiusFilter.KM_5,
+  liveCityArea: String = myProfile.cityArea,
   isEnablingAvailability: Boolean = false,
+  onRefreshLocation: () -> Unit = {},
   onEnableAvailability: (String, AvailabilityDuration) -> Unit,
   onUpdateLiveActivity: (String) -> Unit = {},
   onDisableAvailability: () -> Unit,
@@ -442,12 +445,19 @@ fun HomeDashboardScreen(
           val scopeSubtitle =
             listOfNotNull(
               "Within ${radiusFilter.label}",
-              myProfile.cityArea.takeIf { it.isNotBlank() },
+              liveCityArea.takeIf { it.isNotBlank() },
             ).joinToString(" • ")
           Text(
             text = scopeSubtitle,
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
+        }
+        IconButton(onClick = onRefreshLocation) {
+          Icon(
+            Icons.Rounded.MyLocation,
+            contentDescription = "Refresh live location",
+            tint = MaterialTheme.colorScheme.primary,
           )
         }
         TextButton(onClick = onOpenDiscovery) { Text("See all") }
@@ -548,25 +558,121 @@ fun NearbyDiscoveryScreen(
   radiusFilter: RadiusFilter,
   activityFilter: String?,
   myIsAvailable: Boolean,
+  liveCityArea: String = "",
+  hasLiveGps: Boolean = true,
+  onRefreshLocation: () -> Unit = {},
   onSelectRadius: (RadiusFilter) -> Unit,
   onSelectActivity: (String?) -> Unit,
   onViewProfile: (UserProfile) -> Unit,
   onConnectClick: (UserProfile) -> Unit,
   modifier: Modifier = Modifier,
 ) {
+  val context = LocalContext.current
+  val hasPermission =
+    remember(hasLiveGps) { com.example.util.LocationPrivacy.hasLocationPermission(context) }
+  val discoveryLocationLauncher =
+    rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
+      val granted =
+        result[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
+          result[Manifest.permission.ACCESS_COARSE_LOCATION] == true
+      if (granted) {
+        onRefreshLocation()
+      }
+    }
+
   LazyColumn(
     modifier = modifier.fillMaxSize(),
     contentPadding = PaddingValues(horizontal = 18.dp, vertical = 16.dp),
     verticalArrangement = Arrangement.spacedBy(14.dp),
   ) {
     item {
-      Column {
-        Text("Nearby Discovery", style = MaterialTheme.typography.headlineMedium)
-        Text(
-          text = "Verified 18+ people currently available near your approximate area.",
-          style = MaterialTheme.typography.bodyMedium,
-          color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        Column(modifier = Modifier.weight(1f)) {
+          Text("Nearby Discovery", style = MaterialTheme.typography.headlineMedium)
+          val subtitle =
+            if (liveCityArea.isNotBlank()) {
+              "Within ${radiusFilter.label} of $liveCityArea"
+            } else {
+              "Verified 18+ people currently available near your approximate area."
+            }
+          Text(
+            text = subtitle,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
+        }
+        IconButton(onClick = {
+          if (com.example.util.LocationPrivacy.hasLocationPermission(context)) {
+            onRefreshLocation()
+          } else {
+            discoveryLocationLauncher.launch(
+              arrayOf(
+                Manifest.permission.ACCESS_FINE_LOCATION,
+                Manifest.permission.ACCESS_COARSE_LOCATION,
+              )
+            )
+          }
+        }) {
+          Icon(
+            Icons.Rounded.MyLocation,
+            contentDescription = "Update live location",
+            tint = MaterialTheme.colorScheme.primary,
+          )
+        }
+      }
+    }
+
+    if (!hasPermission || !hasLiveGps) {
+      item {
+        Card(
+          colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
+          shape = MaterialTheme.shapes.medium,
+          modifier = Modifier.fillMaxWidth(),
+        ) {
+          Row(
+            modifier = Modifier.fillMaxWidth().padding(14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+          ) {
+            Column(modifier = Modifier.weight(1f)) {
+              Text(
+                text = if (!hasPermission) "Enable live GPS location" else "Refreshing current GPS location",
+                style = MaterialTheme.typography.titleSmall,
+              )
+              Text(
+                text =
+                  if (!hasPermission) {
+                    "Allow location access so nearby users automatically update when you travel to a new city."
+                  } else {
+                    "Tap refresh to update your current area if you recently changed cities."
+                  },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSecondaryContainer,
+              )
+            }
+            Spacer(modifier = Modifier.width(8.dp))
+            Button(
+              onClick = {
+                if (com.example.util.LocationPrivacy.hasLocationPermission(context)) {
+                  onRefreshLocation()
+                } else {
+                  discoveryLocationLauncher.launch(
+                    arrayOf(
+                      Manifest.permission.ACCESS_FINE_LOCATION,
+                      Manifest.permission.ACCESS_COARSE_LOCATION,
+                    )
+                  )
+                }
+              },
+            ) {
+              Text(if (!hasPermission) "Allow" else "Update")
+            }
+          }
+        }
       }
     }
 

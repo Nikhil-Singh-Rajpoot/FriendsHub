@@ -235,19 +235,20 @@ class FriendsHubRepository(private val db: FirebaseFirestore) {
     durationMinutes: Int,
     approxLat: Double,
     approxLng: Double,
+    cityAreaOverride: String? = null,
   ): Result<Unit> = runCatching {
     val uid = requireUserId()
     val now = System.currentTimeMillis()
     val expiresAt = now + durationMinutes * 60_000L
-    val qLat = LocationPrivacy.quantizeCoordinate(approxLat)
-    val qLng = LocationPrivacy.quantizeCoordinate(approxLng)
+    val qLat = if (approxLat != 0.0 || approxLng != 0.0) LocationPrivacy.quantizeCoordinate(approxLat) else 0.0
+    val qLng = if (approxLat != 0.0 || approxLng != 0.0) LocationPrivacy.quantizeCoordinate(approxLng) else 0.0
     val sessionId = UUID.randomUUID().toString()
 
     val profileRef = db.collection("user_profiles").document(uid)
     val sessionRef = db.collection("availability_sessions").document(sessionId)
 
     val profileUpdates =
-      mapOf(
+      mutableMapOf<String, Any>(
         "isAvailable" to true,
         "discoveryOptIn" to true,
         "preferredActivity" to activity.take(40),
@@ -258,6 +259,10 @@ class FriendsHubRepository(private val db: FirebaseFirestore) {
         "locationUpdatedAtMillis" to now,
         "updatedAt" to FieldValue.serverTimestamp(),
       )
+    val cleanArea = cityAreaOverride?.trim()?.take(80).orEmpty()
+    if (cleanArea.isNotBlank()) {
+      profileUpdates["cityArea"] = cleanArea
+    }
     val sessionPayload =
       mapOf(
         "userId" to uid,
@@ -296,6 +301,35 @@ class FriendsHubRepository(private val db: FirebaseFirestore) {
           SetOptions.merge(),
         )
         .await()
+    } catch (e: CancellationException) {
+      throw e
+    } catch (e: Exception) {
+      handleFirestoreError(e, OperationType.UPDATE, profileRef.path)
+      throw e
+    }
+  }
+
+  suspend fun syncCurrentLocation(
+    cityArea: String?,
+    approxLat: Double,
+    approxLng: Double,
+    updateCoordinates: Boolean,
+  ): Result<Unit> = runCatching {
+    val uid = requireUserId()
+    val profileRef = db.collection("user_profiles").document(uid)
+    val updates = mutableMapOf<String, Any>("updatedAt" to FieldValue.serverTimestamp())
+    val cleanArea = cityArea?.trim()?.take(80).orEmpty()
+    if (cleanArea.isNotBlank()) {
+      updates["cityArea"] = cleanArea
+    }
+    if (updateCoordinates && (approxLat != 0.0 || approxLng != 0.0)) {
+      updates["approxLat"] = LocationPrivacy.quantizeCoordinate(approxLat)
+      updates["approxLng"] = LocationPrivacy.quantizeCoordinate(approxLng)
+      updates["locationUpdatedAtMillis"] = System.currentTimeMillis()
+    }
+    if (updates.size <= 1) return@runCatching
+    try {
+      profileRef.set(updates, SetOptions.merge()).await()
     } catch (e: CancellationException) {
       throw e
     } catch (e: Exception) {

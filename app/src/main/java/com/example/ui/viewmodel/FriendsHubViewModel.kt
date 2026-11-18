@@ -64,6 +64,13 @@ class FriendsHubViewModel(
   private val _viewerLocation = MutableStateFlow<Pair<Double, Double>?>(null)
   val viewerLocation: StateFlow<Pair<Double, Double>?> = _viewerLocation.asStateFlow()
 
+  private val _viewerCityArea = MutableStateFlow<String?>(null)
+  val viewerCityArea: StateFlow<String?> = _viewerCityArea.asStateFlow()
+
+  private var liveLocationJob: Job? = null
+  private var lastSyncedCoords: Pair<Double, Double>? = null
+  private var lastSyncedCityArea: String = ""
+
   private val _cachedPeerProfiles = MutableStateFlow<Map<String, UserProfile>>(emptyMap())
 
   // Live Account & Profile
@@ -150,6 +157,7 @@ class FriendsHubViewModel(
       _radiusFilter,
       _activityFilter,
       _viewerLocation,
+      _viewerCityArea,
     ) { values ->
       @Suppress("UNCHECKED_CAST")
       val myProfileStateVal = values[0] as UiState<UserProfile?>
@@ -163,6 +171,7 @@ class FriendsHubViewModel(
       val activity = values[5] as String?
       @Suppress("UNCHECKED_CAST")
       val viewerCoords = values[6] as Pair<Double, Double>?
+      val liveCityArea = values[7] as String?
 
       val me = (myProfileStateVal as? UiState.Success)?.data
       val blockedUids = (myBlocks.map { it.blockedUid } + blockedMe.map { it.blockerUid }).toSet()
@@ -175,6 +184,7 @@ class FriendsHubViewModel(
         blockedUids = blockedUids,
         radius = radius,
         activityFilter = activity,
+        viewerCityArea = liveCityArea ?: me?.cityArea.orEmpty(),
       )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), emptyList())
 
@@ -364,13 +374,75 @@ class FriendsHubViewModel(
   // ---------------------------------------------------------------------------
   // Availability & Coarse Location
   // ---------------------------------------------------------------------------
-  fun refreshViewerLocation(context: Context) {
-    viewModelScope.launch {
-      val fetched = withTimeoutOrNull(5000L) {
-        LocationPrivacy.fetchCoarseDeviceLocation(context)
+  private suspend fun applyDetectedLocation(detected: LocationPrivacy.DetectedLocationAddress) {
+    _viewerLocation.value = detected.rawLat to detected.rawLng
+    if (detected.cityArea.isNotBlank()) {
+      _viewerCityArea.value = detected.cityArea
+    }
+    val profile = (myProfileState.value as? UiState.Success)?.data ?: return
+    val isLive = profile.isCurrentlyAvailable()
+    val newArea = detected.cityArea.trim()
+    val areaChanged =
+      newArea.isNotBlank() &&
+        !newArea.equals(profile.cityArea.trim(), ignoreCase = true) &&
+        !newArea.equals(lastSyncedCityArea, ignoreCase = true)
+    val coordsMoved =
+      isLive &&
+        (lastSyncedCoords == null ||
+          LocationPrivacy.distanceKm(
+            lastSyncedCoords!!.first,
+            lastSyncedCoords!!.second,
+            detected.approxLat,
+            detected.approxLng,
+          ) >= 0.3)
+
+    if (areaChanged || coordsMoved) {
+      if (areaChanged) lastSyncedCityArea = newArea
+      if (coordsMoved) lastSyncedCoords = detected.approxLat to detected.approxLng
+      repository.syncCurrentLocation(
+        cityArea = newArea.takeIf { areaChanged },
+        approxLat = detected.approxLat,
+        approxLng = detected.approxLng,
+        updateCoordinates = isLive,
+      )
+    }
+  }
+
+  fun startLiveLocationUpdates(context: Context) {
+    val appContext = context.applicationContext
+    if (!LocationPrivacy.hasLocationPermission(appContext)) return
+    if (liveLocationJob?.isActive == true) {
+      refreshViewerLocation(appContext)
+      return
+    }
+    liveLocationJob =
+      viewModelScope.launch {
+        LocationPrivacy.observeLiveLocations(appContext)
+          .catch { /* keep last known state if provider temporarily unavailable */ }
+          .collect { detected ->
+            applyDetectedLocation(detected)
+          }
       }
-      if (fetched != null) {
-        _viewerLocation.value = fetched
+  }
+
+  fun stopLiveLocationUpdates() {
+    liveLocationJob?.cancel()
+    liveLocationJob = null
+  }
+
+  fun refreshViewerLocation(context: Context, showFeedback: Boolean = false) {
+    viewModelScope.launch {
+      val detected = withTimeoutOrNull(6000L) {
+        LocationPrivacy.detectCityAreaFromDeviceLocation(context)
+      }
+      if (detected != null) {
+        applyDetectedLocation(detected)
+        if (showFeedback) {
+          val areaSuffix = detected.cityArea.takeIf { it.isNotBlank() }?.let { " ($it)" }.orEmpty()
+          _statusMessage.value = "Location updated$areaSuffix."
+        }
+      } else if (showFeedback) {
+        _statusMessage.value = "Enable location permission in settings to refresh your live area."
       }
     }
   }
@@ -383,20 +455,33 @@ class FriendsHubViewModel(
     viewModelScope.launch {
       _isEnablingAvailability.value = true
       try {
-        val fetchedCoords = withTimeoutOrNull(5000L) {
-          LocationPrivacy.fetchCoarseDeviceLocation(context)
+        val detected = withTimeoutOrNull(6000L) {
+          LocationPrivacy.detectCityAreaFromDeviceLocation(context)
         }
-        if (fetchedCoords != null) {
-          _viewerLocation.value = fetchedCoords
+        if (detected != null) {
+          _viewerLocation.value = detected.rawLat to detected.rawLng
+          if (detected.cityArea.isNotBlank()) {
+            _viewerCityArea.value = detected.cityArea
+            lastSyncedCityArea = detected.cityArea
+          }
+          lastSyncedCoords = detected.approxLat to detected.approxLng
         }
         val currentProfile = (myProfileState.value as? UiState.Success)?.data
         val fallbackLat = _viewerLocation.value?.first ?: currentProfile?.approxLat ?: 0.0
         val fallbackLng = _viewerLocation.value?.second ?: currentProfile?.approxLng ?: 0.0
-        val coords = fetchedCoords ?: (fallbackLat to fallbackLng)
-        repository.startAvailability(activity, duration.minutes, coords.first, coords.second)
+        val coords =
+          if (detected != null) (detected.approxLat to detected.approxLng)
+          else (fallbackLat to fallbackLng)
+        repository.startAvailability(
+          activity = activity,
+          durationMinutes = duration.minutes,
+          approxLat = coords.first,
+          approxLng = coords.second,
+          cityAreaOverride = detected?.cityArea?.takeIf { it.isNotBlank() },
+        )
           .onSuccess {
             _statusMessage.value =
-              if (fetchedCoords != null) {
+              if (detected != null) {
                 "You're now visible nearby for ${duration.label} ($activity)."
               } else {
                 "You're now live for ${duration.label} ($activity) using your city area."
@@ -840,6 +925,7 @@ class FriendsHubViewModel(
 
   override fun onCleared() {
     super.onCleared()
+    stopLiveLocationUpdates()
     cleanupVoiceSession()
   }
 

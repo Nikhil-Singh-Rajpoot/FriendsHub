@@ -3,6 +3,6 @@
     <item
         android:width="66dp"
         android:height="66dp"
-        android:drawable="@drawable/ic_friendshub_logo"
+        android:drawable="@drawable/ic_betweenus_foreground"
         android:gravity="center" />
 </layer-list>

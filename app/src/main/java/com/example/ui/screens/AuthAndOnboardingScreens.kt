@@ -141,13 +141,13 @@ fun AuthWelcomeScreen(
       ) {
         Image(
           painter = painterResource(id = R.drawable.ic_friendshub_logo),
-          contentDescription = "FriendsHub logo",
+          contentDescription = "Between-Us logo",
           modifier = Modifier.size(44.dp).clip(MaterialTheme.shapes.small),
           contentScale = ContentScale.Crop,
         )
         Column {
           Text(
-            text = "FriendsHub",
+            text = "Between-Us",
             style = MaterialTheme.typography.headlineSmall,
             color = MaterialTheme.colorScheme.primary,
           )
@@ -195,7 +195,7 @@ fun AuthWelcomeScreen(
       FeatureTrustRow(
         icon = Icons.Rounded.PhoneInTalk,
         title = "Private In-App Voice Calls",
-        subtitle = "Talk securely inside FriendsHub before meeting in public.",
+        subtitle = "Talk securely inside Between-Us before meeting in public.",
       )
       Spacer(modifier = Modifier.height(10.dp))
       FeatureTrustRow(
@@ -497,10 +497,10 @@ fun OnboardingFlowScreen(
 
     when (step) {
       0 -> {
-        Text("Create your FriendsHub account", style = MaterialTheme.typography.headlineMedium)
+        Text("Create your Between-Us account", style = MaterialTheme.typography.headlineMedium)
         Spacer(modifier = Modifier.height(6.dp))
         Text(
-          "FriendsHub is strictly for adults 18+. Your private details are never shown to other users.",
+          "Between-Us is strictly for adults 18+. Your private details are never shown to other users.",
           style = MaterialTheme.typography.bodyMedium,
           color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -716,7 +716,7 @@ fun OnboardingFlowScreen(
         Spacer(modifier = Modifier.height(8.dp))
         SafetyNoticeCard(
           title = "Your exact location stays private",
-          message = "FriendsHub only uses coarse area coordinates while your availability toggle is ON. Turn it OFF anytime to stop location sharing immediately.",
+          message = "Between-Us only uses coarse area coordinates while your availability toggle is ON. Turn it OFF anytime to stop location sharing immediately.",
         )
         Spacer(modifier = Modifier.height(16.dp))
 
@@ -784,7 +784,7 @@ fun OnboardingFlowScreen(
             } else if (dobMillis <= 0L) {
               errorText = "Please select your date of birth."
             } else if (!LocationPrivacy.isAdult(dobMillis)) {
-              errorText = "You must be at least 18 years old to use FriendsHub."
+              errorText = "You must be at least 18 years old to use Between-Us."
             } else if (cityArea.trim().length < 2) {
               errorText = "Please enter your city or neighborhood."
             } else {
@@ -818,7 +818,7 @@ fun OnboardingFlowScreen(
       shape = MaterialTheme.shapes.medium,
       modifier = Modifier.fillMaxWidth().height(54.dp).testTag("onboarding_next_button"),
     ) {
-      Text(if (step < 3) "Continue" else "Finish & Enter FriendsHub")
+      Text(if (step < 3) "Continue" else "Finish & Enter Between-Us")
     }
   }
 }

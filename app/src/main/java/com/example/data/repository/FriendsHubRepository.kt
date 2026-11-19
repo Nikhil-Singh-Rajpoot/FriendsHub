@@ -107,7 +107,7 @@ class FriendsHubRepository(private val db: FirebaseFirestore) {
   ): Result<Unit> = runCatching {
     val uid = requireUserId()
     require(LocationPrivacy.isAdult(dateOfBirthMillis)) {
-      "You must be at least 18 years old to join FriendsHub."
+      "You must be at least 18 years old to join Between-Us."
     }
     val computedAge = LocationPrivacy.calculateAge(dateOfBirthMillis).coerceIn(18, 110)
     val firstName = displayName.trim().substringBefore(" ").ifBlank { displayName.trim() }.take(50)
@@ -1157,7 +1157,7 @@ class FriendsHubRepository(private val db: FirebaseFirestore) {
         actorName = callerName,
         type = "INCOMING_CALL",
         title = "Incoming voice call",
-        body = "$callerName is calling you in FriendsHub.",
+        body = "$callerName is calling you in Between-Us.",
         referenceId = callId,
       )
       VoiceCall(

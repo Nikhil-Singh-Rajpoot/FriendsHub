@@ -532,7 +532,7 @@ fun MeetupPlanningScreen(
     ) {
       SafetyNoticeCard(
         title = "Public, busy meeting places only",
-        message = "FriendsHub recommends well-lit, crowded cafes, malls, and public plazas. Never agree to meet at private residences.",
+        message = "Between-Us recommends well-lit, crowded cafes, malls, and public plazas. Never agree to meet at private residences.",
       )
 
       Text("Activity", style = MaterialTheme.typography.labelLarge)
@@ -645,7 +645,7 @@ fun MeetupPlanningScreen(
               Text("Share plan with Trusted Contact", style = MaterialTheme.typography.titleSmall)
               val trustedText =
                 if (account?.hasTrustedContact() == true) {
-                  "Trusted Contact: ${account.trustedContactName} (${account.trustedContactPhone})"
+                  "Trusted Contact: ${account.trustedContactName.ifBlank { "Saved Number" }} (${account.trustedContactPhone})"
                 } else {
                   "Opens SMS / Share Sheet so a family member or friend knows your plan."
                 }

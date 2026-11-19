@@ -56,6 +56,9 @@ class FriendsHubViewModel(
   private val _isEnablingAvailability = MutableStateFlow(false)
   val isEnablingAvailability: StateFlow<Boolean> = _isEnablingAvailability.asStateFlow()
 
+  private val _isSavingTrustedContact = MutableStateFlow(false)
+  val isSavingTrustedContact: StateFlow<Boolean> = _isSavingTrustedContact.asStateFlow()
+
   private val _callBlockedNotice = MutableStateFlow<String?>(null)
   val callBlockedNotice: StateFlow<String?> = _callBlockedNotice.asStateFlow()
 
@@ -361,7 +364,7 @@ class FriendsHubViewModel(
         approxLat = approxLat,
         approxLng = approxLng,
       ).onSuccess {
-        _statusMessage.value = "Welcome to FriendsHub!"
+        _statusMessage.value = "Welcome to Between-Us!"
         onDone()
       }.onFailure { err ->
         _statusMessage.value = err.localizedMessage ?: "Failed to save profile"
@@ -397,13 +400,39 @@ class FriendsHubViewModel(
   }
 
   fun updateTrustedContact(name: String, phone: String, consent: Boolean, onDone: () -> Unit = {}) {
+    val cleanName = name.trim().take(80)
+    val cleanPhone = phone.trim().take(24)
+    val digitCount = cleanPhone.count { it.isDigit() }
+    if (cleanPhone.isBlank() && (cleanName.isNotBlank() || consent)) {
+      _statusMessage.value = "Please enter a trusted contact phone number."
+      return
+    }
+    if (cleanPhone.isNotBlank() && digitCount < 7) {
+      _statusMessage.value = "Please enter a valid phone number (at least 7 digits)."
+      return
+    }
+
     viewModelScope.launch {
-      repository.updateTrustedContactSettings(name, phone, consent)
-        .onSuccess {
-          _statusMessage.value = "Trusted contact safety settings saved."
-          onDone()
-        }
-        .onFailure { _statusMessage.value = it.localizedMessage ?: "Could not save trusted contact" }
+      _isSavingTrustedContact.value = true
+      try {
+        repository.updateTrustedContactSettings(
+          contactName = cleanName,
+          contactPhone = cleanPhone,
+          consentToAlertOnMissedCheckIn = if (cleanPhone.isBlank()) false else consent,
+        )
+          .onSuccess {
+            _statusMessage.value =
+              if (cleanPhone.isBlank()) {
+                "Trusted contact removed."
+              } else {
+                "Trusted contact saved: $cleanPhone"
+              }
+            onDone()
+          }
+          .onFailure { _statusMessage.value = it.localizedMessage ?: "Could not save trusted contact" }
+      } finally {
+        _isSavingTrustedContact.value = false
+      }
     }
   }
 
@@ -1009,7 +1038,7 @@ class FriendsHubViewModel(
     viewModelScope.launch {
       repository.reportUser(reportedUid, reportedName, category, details)
         .onSuccess {
-          _statusMessage.value = "Safety report submitted. Thank you for keeping FriendsHub safe."
+          _statusMessage.value = "Safety report submitted. Thank you for keeping Between-Us safe."
           onDone()
         }
         .onFailure { _statusMessage.value = it.localizedMessage ?: "Could not submit report" }

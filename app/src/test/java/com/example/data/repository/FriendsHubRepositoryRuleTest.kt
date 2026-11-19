@@ -95,6 +95,16 @@ class FriendsHubRepositoryRuleTest : FirestoreEmulatorTestBase() {
     )
     assertTrue(
       withTimeout(TIMEOUT_MS) {
+        aliceRepo.updateTrustedContactSettings("", "+919811112222", true)
+      }.isSuccess
+    )
+    val savedPhoneOnlyAccount = withTimeout(FLOW_TIMEOUT_MS) {
+      aliceRepo.observeAccount(aliceUid).first { it != null && it.trustedContactPhone == "+919811112222" }
+    }!!
+    assertTrue(savedPhoneOnlyAccount.hasTrustedContact())
+    assertTrue(savedPhoneOnlyAccount.trustedContactConsent)
+    assertTrue(
+      withTimeout(TIMEOUT_MS) {
         aliceRepo.updateTrustedContactSettings("Priya Sister", "+919811112222", true)
       }.isSuccess
     )

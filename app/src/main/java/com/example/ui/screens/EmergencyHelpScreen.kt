@@ -165,8 +165,13 @@ fun EmergencyHelpScreen(
           }
 
           if (hasTrusted && account != null) {
+            val trustedLabel =
+              listOfNotNull(
+                account.trustedContactName.takeIf { it.isNotBlank() },
+                account.trustedContactPhone.takeIf { it.isNotBlank() },
+              ).joinToString(" • ")
             Text(
-              text = "${account.trustedContactName} • ${account.trustedContactPhone}",
+              text = trustedLabel,
               style = MaterialTheme.typography.bodyLarge,
             )
             Row(

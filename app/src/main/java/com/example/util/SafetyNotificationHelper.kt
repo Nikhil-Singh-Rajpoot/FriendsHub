@@ -63,7 +63,7 @@ object SafetyNotificationHelper {
       NotificationCompat.Builder(context, CHANNEL_ID_SAFETY)
         .setSmallIcon(android.R.drawable.ic_dialog_info)
         .setContentTitle("Meetup Check-In Reminder")
-        .setContentText("Have you arrived at ${meetup.publicLocationName}? Open FriendsHub to check in or tap I'm Safe.")
+        .setContentText("Have you arrived at ${meetup.publicLocationName}? Open Between-Us to check in or tap I'm Safe.")
         .setStyle(
           NotificationCompat.BigTextStyle()
             .bigText("Your ${meetup.activity} meetup at ${meetup.publicLocationName} (${meetup.scheduledTimeText}) has started. Tap to check in or mark I'm Safe.")
@@ -110,7 +110,7 @@ object SafetyNotificationHelper {
       NotificationCompat.Builder(context, CHANNEL_ID_SAFETY)
         .setSmallIcon(android.R.drawable.ic_dialog_alert)
         .setContentTitle("Missed Check-In: Alert $targetLabel")
-        .setContentText("You missed your safety check-in at ${meetup.publicLocationName}. Tap to alert $targetLabel or open FriendsHub to mark I'm Safe.")
+        .setContentText("You missed your safety check-in at ${meetup.publicLocationName}. Tap to alert $targetLabel or open Between-Us to mark I'm Safe.")
         .setPriority(NotificationCompat.PRIORITY_MAX)
         .setAutoCancel(true)
         .setContentIntent(pendingIntent)
@@ -129,7 +129,7 @@ object SafetyNotificationHelper {
     publicLocationName: String,
     publicArea: String,
   ): String {
-    return "FriendsHub Meetup Plan from ${myName.ifBlank { "Me" }}:\n" +
+    return "Between-Us Meetup Plan from ${myName.ifBlank { "Me" }}:\n" +
       "Meeting: $peerName ($activity)\n" +
       "Place: $publicLocationName, $publicArea\n" +
       "When: $dateText at $timeText\n" +
@@ -144,12 +144,12 @@ object SafetyNotificationHelper {
   ): String {
     val greeting = if (trustedContactName.isNotBlank()) "Hi $trustedContactName, " else ""
     return if (meetup != null) {
-      "${greeting}this is an automatic safety alert from ${myName.ifBlank { "your contact" }} via FriendsHub. " +
+      "${greeting}this is an automatic safety alert from ${myName.ifBlank { "your contact" }} via Between-Us. " +
         "I missed my check-in for my ${meetup.activity} meetup at ${meetup.publicLocationName} (${meetup.publicArea}) " +
         "scheduled for ${meetup.scheduledDateText} at ${meetup.scheduledTimeText} with ${meetup.proposerName}/${meetup.otherName}. " +
         "Last known area: ${liveCityArea.ifBlank { meetup.publicArea }}. Please check on me."
     } else {
-      "${greeting}this is an urgent help alert from ${myName.ifBlank { "your contact" }} via FriendsHub. " +
+      "${greeting}this is an urgent help alert from ${myName.ifBlank { "your contact" }} via Between-Us. " +
         "My last known area is ${liveCityArea.ifBlank { "unavailable" }}. Please call me."
     }
   }
@@ -172,7 +172,7 @@ object SafetyNotificationHelper {
       } else {
         ""
       }
-    return "EMERGENCY ALERT from ${myName.ifBlank { "FriendsHub user" }}: I need help right now. " +
+    return "EMERGENCY ALERT from ${myName.ifBlank { "Between-Us user" }}: I need help right now. " +
       "Current area: ${liveCityArea.ifBlank { "Unknown" }}$coordsPart.$meetupPart"
   }
 

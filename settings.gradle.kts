@@ -22,6 +22,6 @@ dependencyResolutionManagement {
   }
 }
 
-rootProject.name = "FriendsHub"
+rootProject.name = "Between-Us"
 
 include(":app")

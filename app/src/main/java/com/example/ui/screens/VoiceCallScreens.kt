@@ -121,7 +121,7 @@ fun VoiceCallScreen(
           shape = MaterialTheme.shapes.small,
         ) {
           Text(
-            text = "FriendsHub Private Voice Call",
+            text = "Between-Us Private Voice Call",
             style = MaterialTheme.typography.labelMedium,
             color = Color.White,
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),

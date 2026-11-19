@@ -17,7 +17,10 @@ import com.example.ui.screens.EmergencyHelpScreen
 import com.example.ui.screens.IdentityVerificationScreen
 import com.example.ui.screens.MeetupDetailsScreen
 import com.example.ui.screens.MeetupPlanningScreen
+import com.example.ui.screens.SettingsScreen
 import com.example.ui.theme.FriendsHubTheme
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -191,5 +194,71 @@ class SafetyAndVerificationUiTest {
     assertTrue(checkedIn)
     composeTestRule.onNodeWithTag("im_safe_button").performScrollTo().performClick()
     assertTrue(markedSafe)
+  }
+
+  @Test
+  fun settingsScreen_savesTrustedContactWithPhoneOnlyAndValidatesInvalidPhone() {
+    var savedPhone = ""
+    var savedName = "unset"
+    var savedConsent = false
+
+    composeTestRule.setContent {
+      FriendsHubTheme {
+        SettingsScreen(
+          account = UserAccount(uid = "u_me", displayName = "Aarav"),
+          onBack = {},
+          onSavePrefs = { _, _, _ -> },
+          onSaveTrustedContact = { name, phone, consent ->
+            savedName = name
+            savedPhone = phone
+            savedConsent = consent
+          },
+        )
+      }
+    }
+
+    // Invalid short phone shows inline validation error and does not invoke save
+    composeTestRule.onNodeWithTag("trusted_contact_phone_input").performScrollTo().performTextReplacement("123")
+    composeTestRule.onNodeWithTag("save_trusted_contact_button").performScrollTo().performClick()
+    composeTestRule.onNodeWithText("Enter a valid phone number", substring = true).performScrollTo().assertIsDisplayed()
+    assertEquals("", savedPhone)
+    assertFalse(savedConsent)
+
+    // Valid phone number with blank name saves immediately
+    composeTestRule.onNodeWithTag("trusted_contact_phone_input").performScrollTo().performTextReplacement("+919876543210")
+    composeTestRule.onNodeWithTag("trusted_contact_consent_switch").performScrollTo().performClick()
+    composeTestRule.onNodeWithTag("save_trusted_contact_button").performScrollTo().performClick()
+
+    assertEquals("", savedName)
+    assertEquals("+919876543210", savedPhone)
+    assertTrue(savedConsent)
+  }
+
+  @Test
+  fun settingsScreen_displaysSavedBannerWhenOnlyPhoneIsSaved() {
+    val account =
+      UserAccount(
+        uid = "u_me",
+        displayName = "Aarav",
+        trustedContactName = "",
+        trustedContactPhone = "+919876543210",
+        trustedContactConsent = true,
+      )
+    assertTrue(account.hasTrustedContact())
+
+    composeTestRule.setContent {
+      FriendsHubTheme {
+        SettingsScreen(
+          account = account,
+          onBack = {},
+          onSavePrefs = { _, _, _ -> },
+          onSaveTrustedContact = { _, _, _ -> },
+        )
+      }
+    }
+
+    composeTestRule.onNodeWithTag("saved_trusted_contact_banner").performScrollTo().assertIsDisplayed()
+    composeTestRule.onNodeWithText("Saved").performScrollTo().assertIsDisplayed()
+    composeTestRule.onNodeWithTag("clear_trusted_contact_button").performScrollTo().assertIsDisplayed()
   }
 }

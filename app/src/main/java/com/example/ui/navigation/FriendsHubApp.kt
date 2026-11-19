@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -238,13 +239,13 @@ private fun SplashBrandingScreen() {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
       Image(
         painter = painterResource(id = R.drawable.ic_friendshub_logo),
-        contentDescription = "FriendsHub",
+        contentDescription = "Between-Us",
         contentScale = ContentScale.Crop,
         modifier = Modifier.size(92.dp).clip(MaterialTheme.shapes.large),
       )
       Spacer(modifier = Modifier.height(16.dp))
       Text(
-        text = "FriendsHub",
+        text = "Between-Us",
         style = MaterialTheme.typography.displaySmall,
         color = MaterialTheme.colorScheme.onPrimary,
       )
@@ -293,6 +294,7 @@ private fun AuthenticatedAppShell(
   val peerProfiles by viewModel.peerProfiles.collectAsStateWithLifecycle()
   val adminSnapshot by viewModel.adminSnapshot.collectAsStateWithLifecycle()
   val adminLoading by viewModel.adminLoading.collectAsStateWithLifecycle()
+  val isSavingTrustedContact by viewModel.isSavingTrustedContact.collectAsStateWithLifecycle()
 
   val snackbarHostState = remember { SnackbarHostState() }
   LaunchedEffect(statusMessage) {
@@ -323,7 +325,7 @@ private fun AuthenticatedAppShell(
       Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("Account Suspended", style = MaterialTheme.typography.headlineMedium, color = MaterialTheme.colorScheme.error)
         Text(
-          "Your FriendsHub account has been suspended by moderation due to a safety policy violation.",
+          "Your Between-Us account has been suspended by moderation due to a safety policy violation.",
           textAlign = TextAlign.Center,
         )
         Button(onClick = onSignOut) { Text("Sign Out") }
@@ -472,197 +474,182 @@ private fun AuthenticatedAppShell(
     }
   }
 
-  // Sub-screens take full screen cleanly with BackHandler
-  when (val sub = activeSubScreen) {
-    is SubScreen.ProfileDetails -> {
-      val liveProfile = availableProfiles.firstOrNull { it.uid == sub.profile.uid } ?: sub.profile
-      val effectiveLat = viewerLocation?.first ?: myProfile.approxLat
-      val effectiveLng = viewerLocation?.second ?: myProfile.approxLng
-      val distKm = LocationPrivacy.distanceKm(
-        effectiveLat,
-        effectiveLng,
-        liveProfile.approxLat,
-        liveProfile.approxLng,
-      )
-      val distLabel =
-        if (effectiveLat == 0.0 && effectiveLng == 0.0 ||
-          (liveProfile.approxLat == 0.0 && liveProfile.approxLng == 0.0)
-        ) {
-          liveProfile.cityArea
-        } else {
-          LocationPrivacy.formatApproxDistance(distKm)
-        }
-      val common = liveProfile.interests.filter { it in myProfile.interests }
-
-      UserProfileDetailsScreen(
-        profile = liveProfile,
-        distanceLabel = distLabel,
-        commonInterests = common,
-        myIsVerified = myProfile.isVerified,
-        onBack = { activeSubScreen = null },
-        onSendRequest = { act, msg ->
-          viewModel.sendConnectionRequest(liveProfile, act, msg) {
-            activeSubScreen = null
-          }
-        },
-        onBlockUser = {
-          viewModel.blockUser(liveProfile.uid, liveProfile.firstName) {
-            activeSubScreen = null
-          }
-        },
-        onReportUser = { cat, details ->
-          viewModel.reportUser(liveProfile.uid, liveProfile.firstName, cat, details) {
-            activeSubScreen = null
-          }
-        },
-        onOpenVerification = { activeSubScreen = SubScreen.IdentityVerification },
-      )
-      return
-    }
-
-    is SubScreen.PlanMeetup -> {
-      MeetupPlanningScreen(
-        connection = sub.connection,
-        currentUserId = viewModel.currentUserId,
-        myCityArea = myProfile.cityArea,
-        myName = myProfile.firstName,
-        account = account,
-        onBack = { activeSubScreen = null },
-        onOpenTrustedContactSetup = { activeSubScreen = SubScreen.Settings },
-        onPropose = { act, date, time, loc, area, notes, scheduledAtMillis, shareWithTrustedContact ->
-          viewModel.proposeMeetup(
-            connection = sub.connection,
-            activity = act,
-            dateText = date,
-            timeText = time,
-            locationName = loc,
-            area = area,
-            notes = notes,
-            scheduledAtMillis = scheduledAtMillis,
-            shareWithTrustedContact = shareWithTrustedContact,
-          ) {
-            activeSubScreen = null
-          }
-        },
-      )
-      return
-    }
-
-    is SubScreen.MeetupDetails -> {
-      val meetup = meetups.firstOrNull { it.id == sub.meetupId }
-      if (meetup == null) {
-        activeSubScreen = null
-      } else {
-        MeetupDetailsScreen(
-          meetup = meetup,
-          currentUserId = viewModel.currentUserId,
-          account = account,
-          myName = myProfile.firstName,
-          onBack = { activeSubScreen = null },
-          onConfirm = { viewModel.confirmMeetup(meetup) },
-          onCancel = { viewModel.cancelMeetup(meetup) },
-          onComplete = { viewModel.completeMeetup(meetup) },
-          onCheckIn = { viewModel.checkInMeetup(meetup) },
-          onMarkSafe = { viewModel.markMeetupSafe(meetup) },
-          onShareWithTrustedContact = { viewModel.markMeetupSharedWithTrustedContact(meetup) },
-          onOpenEmergencyHelp = { activeSubScreen = SubScreen.EmergencyHelp },
-        )
-      }
-      return
-    }
-
-    SubScreen.Notifications -> {
-      NotificationsScreen(
-        notifications = notifications,
-        onBack = { activeSubScreen = null },
-        onMarkRead = { viewModel.markNotificationRead(it) },
-      )
-      return
-    }
-
-    SubScreen.Settings -> {
-      SettingsScreen(
-        account = account,
-        onBack = { activeSubScreen = null },
-        onSavePrefs = { p, c, m -> viewModel.updateNotificationPreferences(p, c, m) },
-        onSaveTrustedContact = { name, phone, consent ->
-          viewModel.updateTrustedContact(name, phone, consent)
-        },
-        onOpenAdminGate = { activeSubScreen = SubScreen.AdminModeration },
-      )
-      return
-    }
-
-    SubScreen.IdentityVerification -> {
-      IdentityVerificationScreen(
-        account = account,
-        profile = myProfile,
-        onBack = { activeSubScreen = null },
-        onPhoneVerified = { phone -> viewModel.recordLevel1PhoneVerified(phone) },
-        onSubmitLiveSelfie = { photoData -> viewModel.submitLevel2LiveSelfie(photoData) },
-      )
-      return
-    }
-
-    SubScreen.EmergencyHelp -> {
-      EmergencyHelpScreen(
-        account = account,
-        profile = myProfile,
-        liveCityArea = viewerCityArea ?: myProfile.cityArea,
-        liveCoordinates = viewerLocation ?: myProfile.approxLat.takeIf { it != 0.0 }?.let { it to myProfile.approxLng },
-        activeMeetup = upcomingMeetups.firstOrNull(),
-        onBack = { activeSubScreen = null },
-        onMarkMeetupSafe = { m -> viewModel.markMeetupSafe(m) },
-        onOpenSettingsForTrustedContact = { activeSubScreen = SubScreen.Settings },
-      )
-      return
-    }
-
-    SubScreen.BlockedUsers -> {
-      BlockedUsersScreen(
-        blocks = blocks,
-        onBack = { activeSubScreen = null },
-        onUnblock = { viewModel.unblockUser(it) },
-      )
-      return
-    }
-
-    SubScreen.PrivacyPolicy -> {
-      LegalInfoScreen("Privacy Policy", isPrivacyPolicy = true) { activeSubScreen = null }
-      return
-    }
-
-    SubScreen.Terms -> {
-      LegalInfoScreen("Terms & Safety Guidelines", isPrivacyPolicy = false) { activeSubScreen = null }
-      return
-    }
-
-    SubScreen.AdminModeration -> {
-      AdminModerationScreen(
-        currentSignedInEmail = userEmail,
-        isEmailVerified = Firebase.auth.currentUser?.isEmailVerified == true,
-        snapshot = adminSnapshot,
-        isLoading = adminLoading,
-        onLoad = { viewModel.loadAdminDashboard() },
-        onBack = { activeSubScreen = null },
-        onToggleSuspend = { uid, suspend -> viewModel.adminToggleSuspend(uid, suspend) },
-        onToggleVerified = { uid, verified -> viewModel.adminToggleVerified(uid, verified) },
-        onResolveReport = { id, status -> viewModel.adminUpdateReport(id, status, "") },
-      )
-      return
-    }
-
-    null -> {}
-  }
-
-  // Adaptive Navigation Shell (Bottom NavigationBar on phones, NavigationRail on tablets)
   BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
     val useRail = maxWidth >= 600.dp
 
-    Scaffold(
-      snackbarHost = { SnackbarHost(snackbarHostState) },
-      contentWindowInsets = WindowInsets(0, 0, 0, 0),
-      bottomBar = {
+    when (val sub = activeSubScreen) {
+      is SubScreen.ProfileDetails -> {
+        val liveProfile = availableProfiles.firstOrNull { it.uid == sub.profile.uid } ?: sub.profile
+        val effectiveLat = viewerLocation?.first ?: myProfile.approxLat
+        val effectiveLng = viewerLocation?.second ?: myProfile.approxLng
+        val distKm = LocationPrivacy.distanceKm(
+          effectiveLat,
+          effectiveLng,
+          liveProfile.approxLat,
+          liveProfile.approxLng,
+        )
+        val distLabel =
+          if (effectiveLat == 0.0 && effectiveLng == 0.0 ||
+            (liveProfile.approxLat == 0.0 && liveProfile.approxLng == 0.0)
+          ) {
+            liveProfile.cityArea
+          } else {
+            LocationPrivacy.formatApproxDistance(distKm)
+          }
+        val common = liveProfile.interests.filter { it in myProfile.interests }
+
+        UserProfileDetailsScreen(
+          profile = liveProfile,
+          distanceLabel = distLabel,
+          commonInterests = common,
+          myIsVerified = myProfile.isVerified,
+          onBack = { activeSubScreen = null },
+          onSendRequest = { act, msg ->
+            viewModel.sendConnectionRequest(liveProfile, act, msg) {
+              activeSubScreen = null
+            }
+          },
+          onBlockUser = {
+            viewModel.blockUser(liveProfile.uid, liveProfile.firstName) {
+              activeSubScreen = null
+            }
+          },
+          onReportUser = { cat, details ->
+            viewModel.reportUser(liveProfile.uid, liveProfile.firstName, cat, details) {
+              activeSubScreen = null
+            }
+          },
+          onOpenVerification = { activeSubScreen = SubScreen.IdentityVerification },
+        )
+      }
+
+      is SubScreen.PlanMeetup -> {
+        MeetupPlanningScreen(
+          connection = sub.connection,
+          currentUserId = viewModel.currentUserId,
+          myCityArea = myProfile.cityArea,
+          myName = myProfile.firstName,
+          account = account,
+          onBack = { activeSubScreen = null },
+          onOpenTrustedContactSetup = { activeSubScreen = SubScreen.Settings },
+          onPropose = { act, date, time, loc, area, notes, scheduledAtMillis, shareWithTrustedContact ->
+            viewModel.proposeMeetup(
+              connection = sub.connection,
+              activity = act,
+              dateText = date,
+              timeText = time,
+              locationName = loc,
+              area = area,
+              notes = notes,
+              scheduledAtMillis = scheduledAtMillis,
+              shareWithTrustedContact = shareWithTrustedContact,
+            ) {
+              activeSubScreen = null
+            }
+          },
+        )
+      }
+
+      is SubScreen.MeetupDetails -> {
+        val meetup = meetups.firstOrNull { it.id == sub.meetupId }
+        if (meetup == null) {
+          LaunchedEffect(sub.meetupId) { activeSubScreen = null }
+        } else {
+          MeetupDetailsScreen(
+            meetup = meetup,
+            currentUserId = viewModel.currentUserId,
+            account = account,
+            myName = myProfile.firstName,
+            onBack = { activeSubScreen = null },
+            onConfirm = { viewModel.confirmMeetup(meetup) },
+            onCancel = { viewModel.cancelMeetup(meetup) },
+            onComplete = { viewModel.completeMeetup(meetup) },
+            onCheckIn = { viewModel.checkInMeetup(meetup) },
+            onMarkSafe = { viewModel.markMeetupSafe(meetup) },
+            onShareWithTrustedContact = { viewModel.markMeetupSharedWithTrustedContact(meetup) },
+            onOpenEmergencyHelp = { activeSubScreen = SubScreen.EmergencyHelp },
+          )
+        }
+      }
+
+      SubScreen.Notifications -> {
+        NotificationsScreen(
+          notifications = notifications,
+          onBack = { activeSubScreen = null },
+          onMarkRead = { viewModel.markNotificationRead(it) },
+        )
+      }
+
+      SubScreen.Settings -> {
+        SettingsScreen(
+          account = account,
+          isSavingTrustedContact = isSavingTrustedContact,
+          onBack = { activeSubScreen = null },
+          onSavePrefs = { p, c, m -> viewModel.updateNotificationPreferences(p, c, m) },
+          onSaveTrustedContact = { name, phone, consent ->
+            viewModel.updateTrustedContact(name, phone, consent)
+          },
+          onOpenAdminGate = { activeSubScreen = SubScreen.AdminModeration },
+        )
+      }
+
+      SubScreen.IdentityVerification -> {
+        IdentityVerificationScreen(
+          account = account,
+          profile = myProfile,
+          onBack = { activeSubScreen = null },
+          onPhoneVerified = { phone -> viewModel.recordLevel1PhoneVerified(phone) },
+          onSubmitLiveSelfie = { photoData -> viewModel.submitLevel2LiveSelfie(photoData) },
+        )
+      }
+
+      SubScreen.EmergencyHelp -> {
+        EmergencyHelpScreen(
+          account = account,
+          profile = myProfile,
+          liveCityArea = viewerCityArea ?: myProfile.cityArea,
+          liveCoordinates = viewerLocation ?: myProfile.approxLat.takeIf { it != 0.0 }?.let { it to myProfile.approxLng },
+          activeMeetup = upcomingMeetups.firstOrNull(),
+          onBack = { activeSubScreen = null },
+          onMarkMeetupSafe = { m -> viewModel.markMeetupSafe(m) },
+          onOpenSettingsForTrustedContact = { activeSubScreen = SubScreen.Settings },
+        )
+      }
+
+      SubScreen.BlockedUsers -> {
+        BlockedUsersScreen(
+          blocks = blocks,
+          onBack = { activeSubScreen = null },
+          onUnblock = { viewModel.unblockUser(it) },
+        )
+      }
+
+      SubScreen.PrivacyPolicy -> {
+        LegalInfoScreen("Privacy Policy", isPrivacyPolicy = true) { activeSubScreen = null }
+      }
+
+      SubScreen.Terms -> {
+        LegalInfoScreen("Terms & Safety Guidelines", isPrivacyPolicy = false) { activeSubScreen = null }
+      }
+
+      SubScreen.AdminModeration -> {
+        AdminModerationScreen(
+          currentSignedInEmail = userEmail,
+          isEmailVerified = Firebase.auth.currentUser?.isEmailVerified == true,
+          snapshot = adminSnapshot,
+          isLoading = adminLoading,
+          onLoad = { viewModel.loadAdminDashboard() },
+          onBack = { activeSubScreen = null },
+          onToggleSuspend = { uid, suspend -> viewModel.adminToggleSuspend(uid, suspend) },
+          onToggleVerified = { uid, verified -> viewModel.adminToggleVerified(uid, verified) },
+          onResolveReport = { id, status -> viewModel.adminUpdateReport(id, status, "") },
+        )
+      }
+
+      null -> {
+        Scaffold(
+          contentWindowInsets = WindowInsets(0, 0, 0, 0),
+          bottomBar = {
         if (!useRail) {
           NavigationBar(modifier = Modifier.navigationBarsPadding()) {
             MainTab.entries.forEach { tab ->
@@ -826,6 +813,22 @@ private fun AuthenticatedAppShell(
         }
       }
     }
+      }
+    }
+
+    SnackbarHost(
+      hostState = snackbarHostState,
+      modifier =
+        Modifier.align(Alignment.BottomCenter)
+          .navigationBarsPadding()
+          .imePadding()
+          .padding(
+            start = 16.dp,
+            end = 16.dp,
+            top = 12.dp,
+            bottom = if (activeSubScreen == null && !useRail) 88.dp else 16.dp,
+          ),
+    )
   }
 
   quickConnectTarget?.let { target ->

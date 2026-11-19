@@ -66,7 +66,7 @@ data class UserAccount(
   @ServerTimestamp val createdAt: Timestamp? = null,
   @ServerTimestamp val updatedAt: Timestamp? = null,
 ) {
-  fun hasTrustedContact(): Boolean = trustedContactName.isNotBlank() && trustedContactPhone.isNotBlank()
+  fun hasTrustedContact(): Boolean = trustedContactPhone.isNotBlank()
 }
 
 @IgnoreExtraProperties

@@ -71,6 +71,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -432,7 +434,7 @@ fun ProfileScreen(
     AlertDialog(
       onDismissRequest = { showDeleteDialog = false },
       title = { Text("Delete Account Data?") },
-      text = { Text("Your profile and private account details will be permanently deleted from FriendsHub.") },
+      text = { Text("Your profile and private account details will be permanently deleted from Between-Us.") },
       confirmButton = {
         Button(
           onClick = {
@@ -541,11 +543,15 @@ fun NotificationsScreen(
 @Composable
 fun SettingsScreen(
   account: UserAccount?,
+  isSavingTrustedContact: Boolean = false,
   onBack: () -> Unit,
   onSavePrefs: (push: Boolean, calls: Boolean, meetups: Boolean) -> Unit,
   onSaveTrustedContact: (name: String, phone: String, consent: Boolean) -> Unit = { _, _, _ -> },
   onOpenAdminGate: () -> Unit = {},
 ) {
+  val focusManager = LocalFocusManager.current
+  val keyboardController = LocalSoftwareKeyboardController.current
+
   var push by remember(account?.pushNotificationsEnabled) { mutableStateOf(account?.pushNotificationsEnabled ?: true) }
   var calls by remember(account?.callAlertsEnabled) { mutableStateOf(account?.callAlertsEnabled ?: true) }
   var meetups by remember(account?.meetupRemindersEnabled) { mutableStateOf(account?.meetupRemindersEnabled ?: true) }
@@ -553,6 +559,7 @@ fun SettingsScreen(
   var trustedName by remember(account?.trustedContactName) { mutableStateOf(account?.trustedContactName.orEmpty()) }
   var trustedPhone by remember(account?.trustedContactPhone) { mutableStateOf(account?.trustedContactPhone.orEmpty()) }
   var trustedConsent by remember(account?.trustedContactConsent) { mutableStateOf(account?.trustedContactConsent ?: false) }
+  var phoneError by remember { mutableStateOf<String?>(null) }
 
   Scaffold(
     topBar = {
@@ -603,28 +610,71 @@ fun SettingsScreen(
         modifier = Modifier.fillMaxWidth().testTag("trusted_contact_settings_card"),
       ) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-          Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Icon(Icons.Rounded.ContactPhone, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-            Text("Trusted Safety Contact", style = MaterialTheme.typography.titleMedium)
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+          ) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+              Icon(Icons.Rounded.ContactPhone, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+              Text("Trusted Safety Contact", style = MaterialTheme.typography.titleMedium)
+            }
+            if (account?.hasTrustedContact() == true) {
+              StatusPill("Saved", EmeraldContainer, EmeraldOnline)
+            } else {
+              StatusPill("Not Set", AmberContainer, AmberWarm)
+            }
           }
           Text(
             text = "Saved privately on your account so you can share meetup plans or prepare an alert if a check-in is missed.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
           )
+
+          if (account?.hasTrustedContact() == true) {
+            Card(
+              colors = CardDefaults.cardColors(containerColor = EmeraldContainer),
+              shape = MaterialTheme.shapes.medium,
+              modifier = Modifier.fillMaxWidth().testTag("saved_trusted_contact_banner"),
+            ) {
+              Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(
+                  text = "Active Contact: ${account.trustedContactName.ifBlank { "Trusted Contact" }} • ${account.trustedContactPhone}",
+                  style = MaterialTheme.typography.labelLarge,
+                  color = EmeraldOnline,
+                )
+                Text(
+                  text =
+                    if (account.trustedContactConsent) {
+                      "Missed meetup check-in alerts are enabled."
+                    } else {
+                      "Saved for quick sharing & SOS alerts."
+                    },
+                  style = MaterialTheme.typography.bodySmall,
+                  color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+              }
+            }
+          }
+
           OutlinedTextField(
             value = trustedName,
             onValueChange = { trustedName = it },
-            label = { Text("Trusted Contact Name") },
+            label = { Text("Trusted Contact Name (Optional)") },
             placeholder = { Text("e.g., Priya (Sister)") },
             singleLine = true,
             modifier = Modifier.fillMaxWidth().testTag("trusted_contact_name_input"),
           )
           OutlinedTextField(
             value = trustedPhone,
-            onValueChange = { trustedPhone = it },
-            label = { Text("Trusted Contact Phone") },
+            onValueChange = {
+              trustedPhone = it
+              if (phoneError != null) phoneError = null
+            },
+            label = { Text("Trusted Contact Phone *") },
             placeholder = { Text("+919876543210") },
+            isError = phoneError != null,
+            supportingText = phoneError?.let { msg -> { Text(msg) } },
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
             singleLine = true,
             modifier = Modifier.fillMaxWidth().testTag("trusted_contact_phone_input"),
@@ -642,10 +692,41 @@ fun SettingsScreen(
             )
           }
           Button(
-            onClick = { onSaveTrustedContact(trustedName, trustedPhone, trustedConsent) },
+            onClick = {
+              focusManager.clearFocus()
+              keyboardController?.hide()
+              val cleanPhone = trustedPhone.trim()
+              val digitCount = cleanPhone.count { it.isDigit() }
+              if (cleanPhone.isBlank() || digitCount < 7) {
+                phoneError = "Enter a valid phone number (at least 7 digits)"
+              } else {
+                phoneError = null
+                onSaveTrustedContact(trustedName.trim(), cleanPhone, trustedConsent)
+              }
+            },
+            enabled = !isSavingTrustedContact,
             modifier = Modifier.fillMaxWidth().height(48.dp).testTag("save_trusted_contact_button"),
           ) {
-            Text("Save Trusted Contact")
+            if (isSavingTrustedContact) {
+              CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+              Spacer(modifier = Modifier.width(8.dp))
+              Text("Saving...")
+            } else {
+              Text("Save Trusted Contact")
+            }
+          }
+          if (account?.hasTrustedContact() == true && !isSavingTrustedContact) {
+            TextButton(
+              onClick = {
+                focusManager.clearFocus()
+                keyboardController?.hide()
+                phoneError = null
+                onSaveTrustedContact("", "", false)
+              },
+              modifier = Modifier.align(Alignment.End).testTag("clear_trusted_contact_button"),
+            ) {
+              Text("Remove Trusted Contact")
+            }
           }
         }
       }
@@ -791,16 +872,16 @@ fun LegalInfoScreen(
       verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
       if (isPrivacyPolicy) {
-        Text("FriendsHub Privacy Policy", style = MaterialTheme.typography.headlineSmall)
+        Text("Between-Us Privacy Policy", style = MaterialTheme.typography.headlineSmall)
         Text(
-          "1. Purpose & Consent: FriendsHub collects only the minimum information required for short-term friendship discovery among verified adults 18+ in India (DPDP Act aligned).\n\n" +
+          "1. Purpose & Consent: Between-Us collects only the minimum information required for short-term friendship discovery among verified adults 18+ in India (DPDP Act aligned).\n\n" +
             "2. Location Privacy: GPS coordinates are quantized on-device to approximate ~220m cells and stored only while your availability toggle is ON. Exact GPS coordinates and residential addresses are never shared.\n\n" +
             "3. Identity & Trusted Contacts: Verified mobile numbers, live verification selfies, and emergency trusted contact details are strictly private and never shared with other users.\n\n" +
             "4. Account Deletion: You can permanently delete your profile and account data at any time from the Profile tab.",
           style = MaterialTheme.typography.bodyLarge,
         )
       } else {
-        Text("FriendsHub Meeting Safety Policy & Guidelines", style = MaterialTheme.typography.headlineSmall)
+        Text("Between-Us Meeting Safety Policy & Guidelines", style = MaterialTheme.typography.headlineSmall)
         Text(
           "1. Adults 18+ & Verified Connections Only: Only verified members (Level 1 Phone OTP + Level 2 Live Selfie approved) can send or receive connection requests.\n\n" +
             "2. Public, Busy Meeting Places Only: Always choose crowded, well-lit public cafes, malls, or parks.\n\n" +
@@ -862,7 +943,7 @@ fun AdminModerationScreen(
           Column(modifier = Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("Admin Credential Verification", style = MaterialTheme.typography.titleLarge)
             Text(
-              "Only the single authorized FriendsHub administrator credential can unlock moderation tools.",
+              "Only the single authorized Between-Us administrator credential can unlock moderation tools.",
               style = MaterialTheme.typography.bodyMedium,
               color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

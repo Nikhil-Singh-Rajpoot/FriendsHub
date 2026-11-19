@@ -282,6 +282,156 @@ class FriendsHubRepositoryRuleTest : FirestoreEmulatorTestBase() {
   }
 
   @Test
+  fun meetup_5mProximityAutoStartsMeetup_andAdminSeesFullAuditRecords() = runBlocking {
+    val suffix = UUID.randomUUID().toString().take(8)
+    val aliceEmail = "prox_alice_$suffix@test.com"
+    val bobEmail = "prox_bob_$suffix@test.com"
+
+    val aliceUid = signInTestUser(aliceEmail)
+    val aliceRepo = FriendsHubRepository(firestore)
+    assertTrue(
+      withTimeout(TIMEOUT_MS) {
+        aliceRepo.completeOnboarding(
+          displayName = "Alice",
+          email = aliceEmail,
+          phoneNote = "",
+          dateOfBirthMillis = adultDobMillis(),
+          gender = "Female",
+          bio = "Tea meetup tester",
+          cityArea = "Sector 29, Gurugram",
+          photoData = "",
+          interests = listOf("Have tea or coffee"),
+        )
+      }.isSuccess
+    )
+
+    val bobUid = signInTestUser(bobEmail)
+    val bobRepo = FriendsHubRepository(firestore)
+    assertTrue(
+      withTimeout(TIMEOUT_MS) {
+        bobRepo.completeOnboarding(
+          displayName = "Bob",
+          email = bobEmail,
+          phoneNote = "",
+          dateOfBirthMillis = adultDobMillis(),
+          gender = "Male",
+          bio = "Coffee meetup tester",
+          cityArea = "Sector 29, Gurugram",
+          photoData = "",
+          interests = listOf("Have tea or coffee"),
+        )
+      }.isSuccess
+    )
+
+    // Verify both users via Admin
+    signInVerifiedAdmin()
+    val adminRepo = FriendsHubRepository(firestore)
+    assertTrue(withTimeout(TIMEOUT_MS) { adminRepo.adminToggleVerified(aliceUid, true) }.isSuccess)
+    assertTrue(withTimeout(TIMEOUT_MS) { adminRepo.adminToggleVerified(bobUid, true) }.isSuccess)
+
+    // Connect Alice & Bob
+    signInTestUser(aliceEmail)
+    val aliceProfile = withTimeout(TIMEOUT_MS) { aliceRepo.getProfileById(aliceUid).getOrThrow()!! }
+    val bobProfile = withTimeout(TIMEOUT_MS) { aliceRepo.getProfileById(bobUid).getOrThrow()!! }
+    assertTrue(
+      withTimeout(TIMEOUT_MS) {
+        aliceRepo.sendConnectionRequest(aliceProfile, bobProfile, "Tea", "Chai at Blue Tokai?")
+      }.isSuccess
+    )
+
+    signInTestUser(bobEmail)
+    val req = withTimeout(FLOW_TIMEOUT_MS) {
+      bobRepo.observeConnectionRequests(bobUid).first { list -> list.any { it.fromUid == aliceUid } }
+    }.first { it.fromUid == aliceUid }
+    assertTrue(withTimeout(TIMEOUT_MS) { bobRepo.respondToConnectionRequest(req, true, "Sector 29") }.isSuccess)
+
+    val conn = withTimeout(FLOW_TIMEOUT_MS) {
+      bobRepo.observeConnections(bobUid).first { list -> list.any { it.participantUids.contains(aliceUid) } }
+    }.first { it.participantUids.contains(aliceUid) }
+
+    // Alice creates Tea meetup with 15-minute countdown
+    signInTestUser(aliceEmail)
+    val scheduledMillis = System.currentTimeMillis() + 15 * 60_000L
+    val meetupId = withTimeout(TIMEOUT_MS) {
+      aliceRepo.proposeMeetup(
+        connection = conn,
+        myName = "Alice",
+        activity = "Tea",
+        scheduledDateText = "Today",
+        scheduledTimeText = "6:00 PM",
+        publicLocationName = "Blue Tokai Coffee Roasters",
+        publicArea = "Sector 29, Gurugram",
+        notes = "Table near entrance",
+        scheduledAtMillis = scheduledMillis,
+        sharedWithTrustedContact = false,
+      ).getOrThrow()
+    }
+
+    // Bob confirms meetup
+    signInTestUser(bobEmail)
+    val proposedMeetup = withTimeout(FLOW_TIMEOUT_MS) {
+      bobRepo.observeMeetups(bobUid).first { list -> list.any { it.id == meetupId } }
+    }.first { it.id == meetupId }
+    assertTrue(withTimeout(TIMEOUT_MS) { bobRepo.confirmMeetup(proposedMeetup, "Bob") }.isSuccess)
+
+    // Bob shares location at (28.459500, 77.026600)
+    val bobStarted = withTimeout(TIMEOUT_MS) {
+      bobRepo.updateMeetupProximityAndAutoStart(meetupId, 28.459500, 77.026600, "Bob").getOrThrow()
+    }
+    assertFalse("Only one participant location present; must not start yet", bobStarted)
+
+    // Alice is ~22m away (28.459700, 77.026600) -> remains CONFIRMED
+    signInTestUser(aliceEmail)
+    val aliceFarStarted = withTimeout(TIMEOUT_MS) {
+      aliceRepo.updateMeetupProximityAndAutoStart(meetupId, 28.459700, 77.026600, "Alice").getOrThrow()
+    }
+    assertFalse("22m away must NOT trigger STARTED", aliceFarStarted)
+
+    // Alice walks within ~2.2m of Bob (28.459520, 77.026600) -> auto-starts meetup!
+    val aliceCloseStarted = withTimeout(TIMEOUT_MS) {
+      aliceRepo.updateMeetupProximityAndAutoStart(meetupId, 28.459520, 77.026600, "Alice").getOrThrow()
+    }
+    assertTrue("<= 5m proximity must trigger STARTED", aliceCloseStarted)
+
+    val startedMeetup = withTimeout(FLOW_TIMEOUT_MS) {
+      aliceRepo.observeMeetups(aliceUid).first { list ->
+        list.any { it.id == meetupId && it.status == "STARTED" }
+      }
+    }.first { it.id == meetupId }
+    assertEquals("STARTED", startedMeetup.status)
+    assertTrue(startedMeetup.startedAtMillis > 0L)
+    assertTrue(startedMeetup.proximityDistanceMeters in 0.0..5.0)
+    assertTrue(startedMeetup.isCheckedInBy(aliceUid))
+    assertTrue(startedMeetup.isCheckedInBy(bobUid))
+
+    // Bob receives MEETUP_STARTED notification
+    signInTestUser(bobEmail)
+    val bobNotifs = withTimeout(FLOW_TIMEOUT_MS) {
+      bobRepo.observeNotifications(bobUid).first { list -> list.any { it.type == "MEETUP_STARTED" && it.referenceId == meetupId } }
+    }
+    assertTrue(bobNotifs.any { it.type == "MEETUP_STARTED" && it.referenceId == meetupId })
+
+    // Mark safe -> transitions STARTED -> COMPLETED with completedAtMillis
+    assertTrue(withTimeout(TIMEOUT_MS) { bobRepo.markMeetupSafe(startedMeetup) }.isSuccess)
+    val completedMeetup = withTimeout(FLOW_TIMEOUT_MS) {
+      bobRepo.observeMeetups(bobUid).first { list ->
+        list.any { it.id == meetupId && it.status == "COMPLETED" }
+      }
+    }.first { it.id == meetupId }
+    assertTrue(completedMeetup.completedAtMillis > 0L)
+
+    // Admin sees full investigation audit trail in snapshot.meetups
+    signInVerifiedAdmin()
+    val adminSnapshot = withTimeout(TIMEOUT_MS) { adminRepo.fetchAdminDashboardData().getOrThrow() }
+    val auditRecord = adminSnapshot.meetups.firstOrNull { it.id == meetupId }
+    assertTrue("Admin dashboard must include the meetup audit record", auditRecord != null)
+    assertEquals("COMPLETED", auditRecord!!.status)
+    assertTrue(auditRecord.startedAtMillis > 0L)
+    assertTrue(auditRecord.completedAtMillis > 0L)
+    assertTrue(auditRecord.proximityDistanceMeters in 0.0..5.0)
+  }
+
+  @Test
   fun unauthenticated_and_cross_user_access_fail_with_permission_denied() = runBlocking {
     val suffix = UUID.randomUUID().toString().take(8)
     val aliceEmail = "priv_alice_$suffix@test.com"

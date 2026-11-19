@@ -19,6 +19,8 @@ import com.example.ui.screens.MeetupDetailsScreen
 import com.example.ui.screens.MeetupPlanningScreen
 import com.example.ui.screens.SettingsScreen
 import com.example.ui.theme.FriendsHubTheme
+import com.example.data.repository.AdminDashboardSnapshot
+import com.example.ui.screens.AdminModerationScreen
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -260,5 +262,175 @@ class SafetyAndVerificationUiTest {
     composeTestRule.onNodeWithTag("saved_trusted_contact_banner").performScrollTo().assertIsDisplayed()
     composeTestRule.onNodeWithText("Saved").performScrollTo().assertIsDisplayed()
     composeTestRule.onNodeWithTag("clear_trusted_contact_button").performScrollTo().assertIsDisplayed()
+  }
+
+  @Test
+  fun meetupDetailsScreen_displaysCountdownAndCheckProximityButton_andStartedStatus() {
+    var proximityChecked = false
+    val now = System.currentTimeMillis()
+    val confirmedMeetup =
+      Meetup(
+        id = "m_confirmed",
+        connectionId = "c_1",
+        proposerUid = "u_me",
+        proposerName = "Aarav",
+        otherUid = "u_peer",
+        otherName = "Riya",
+        activity = "Coffee",
+        scheduledDateText = "Today",
+        scheduledTimeText = "6:00 PM",
+        scheduledAtMillis = now + 10 * 60_000L,
+        publicLocationName = "Blue Tokai Cafe",
+        publicArea = "Sector 29, Gurugram",
+        status = "CONFIRMED",
+        proximityDistanceMeters = 18.4,
+      )
+
+    composeTestRule.setContent {
+      FriendsHubTheme {
+        MeetupDetailsScreen(
+          meetup = confirmedMeetup,
+          currentUserId = "u_me",
+          account = UserAccount(uid = "u_me", displayName = "Aarav"),
+          myName = "Aarav",
+          onBack = {},
+          onConfirm = {},
+          onCancel = {},
+          onComplete = {},
+          onCheckProximityNow = { proximityChecked = true },
+        )
+      }
+    }
+
+    composeTestRule.onNodeWithTag("meetup_countdown_card").performScrollTo().assertIsDisplayed()
+    composeTestRule.onNodeWithTag("meetup_countdown_text").performScrollTo().assertIsDisplayed()
+    composeTestRule.onNodeWithTag("meetup_proximity_status").performScrollTo().assertIsDisplayed()
+    composeTestRule.onNodeWithText("18.4 m", substring = true).performScrollTo().assertIsDisplayed()
+    composeTestRule.onNodeWithTag("check_proximity_now_button").performScrollTo().performClick()
+    assertTrue(proximityChecked)
+  }
+
+  @Test
+  fun meetupDetailsScreen_displaysStartedBannerWhenWithin5Meters() {
+    val startedMeetup =
+      Meetup(
+        id = "m_started",
+        connectionId = "c_1",
+        proposerUid = "u_me",
+        proposerName = "Aarav",
+        otherUid = "u_peer",
+        otherName = "Riya",
+        activity = "Tea",
+        scheduledDateText = "Today",
+        scheduledTimeText = "5:00 PM",
+        scheduledAtMillis = System.currentTimeMillis() - 60_000L,
+        publicLocationName = "Third Wave Coffee",
+        publicArea = "Sector 29, Gurugram",
+        status = "STARTED",
+        proximityDistanceMeters = 3.2,
+        startedAtMillis = System.currentTimeMillis() - 30_000L,
+      )
+
+    composeTestRule.setContent {
+      FriendsHubTheme {
+        MeetupDetailsScreen(
+          meetup = startedMeetup,
+          currentUserId = "u_me",
+          account = UserAccount(uid = "u_me", displayName = "Aarav"),
+          myName = "Aarav",
+          onBack = {},
+          onConfirm = {},
+          onCancel = {},
+          onComplete = {},
+        )
+      }
+    }
+
+    composeTestRule.onNodeWithText("Meetup Live Status").performScrollTo().assertIsDisplayed()
+    composeTestRule.onNodeWithText("STARTED • Meetup in progress", substring = true).performScrollTo().assertIsDisplayed()
+    composeTestRule.onNodeWithText("3.2 m apart", substring = true).performScrollTo().assertIsDisplayed()
+  }
+
+  @Test
+  fun adminModerationScreen_displaysMeetupMonitorAndFiltersStartedAndCompletedRecords() {
+    val startedMeetup =
+      Meetup(
+        id = "m_started_admin",
+        proposerUid = "uid_alice_123",
+        proposerName = "Alice",
+        otherUid = "uid_bob_456",
+        otherName = "Bob",
+        activity = "Tea",
+        scheduledDateText = "Today",
+        scheduledTimeText = "5:00 PM",
+        publicLocationName = "Blue Tokai Cafe",
+        publicArea = "Sector 29",
+        status = "STARTED",
+        proximityDistanceMeters = 2.8,
+        startedAtMillis = System.currentTimeMillis() - 120_000L,
+        startedLat = 28.45951,
+        startedLng = 77.02661,
+      )
+    val completedMeetup =
+      Meetup(
+        id = "m_completed_admin",
+        proposerUid = "uid_charlie_789",
+        proposerName = "Charlie",
+        otherUid = "uid_diya_012",
+        otherName = "Diya",
+        activity = "Coffee",
+        scheduledDateText = "Yesterday",
+        scheduledTimeText = "6:30 PM",
+        publicLocationName = "Third Wave Coffee",
+        publicArea = "CyberHub",
+        status = "COMPLETED",
+        proximityDistanceMeters = 4.1,
+        startedAtMillis = System.currentTimeMillis() - 86_400_000L,
+        completedAtMillis = System.currentTimeMillis() - 82_800_000L,
+      )
+
+    val snapshot =
+      AdminDashboardSnapshot(
+        users = emptyList(),
+        profiles = emptyList(),
+        reports = emptyList(),
+        meetups = listOf(startedMeetup, completedMeetup),
+        totalConnections = 2,
+        totalMeetups = 2,
+      )
+
+    composeTestRule.setContent {
+      FriendsHubTheme {
+        AdminModerationScreen(
+          currentSignedInEmail = "nikhilkumarsingh2000@gmail.com",
+          isEmailVerified = true,
+          snapshot = snapshot,
+          isLoading = false,
+          onLoad = {},
+          onBack = {},
+          onToggleSuspend = { _, _ -> },
+          onToggleVerified = { _, _ -> },
+          onResolveReport = { _, _ -> },
+        )
+      }
+    }
+
+    // Unlock admin gate
+    composeTestRule.onNodeWithTag("admin_email_input").performTextReplacement("nikhilkumarsingh2000@gmail.com")
+    val requiredKey = com.example.BuildConfig.ADMIN_ACCESS_KEY
+    if (requiredKey.isNotBlank()) {
+      composeTestRule.onNodeWithTag("admin_key_input").performTextReplacement(requiredKey)
+    }
+    composeTestRule.onNodeWithTag("admin_unlock_button").performClick()
+
+    // Both records are visible under ALL
+    composeTestRule.onNodeWithText("Meetup Monitor & Investigation Records (2)").performScrollTo().assertIsDisplayed()
+    composeTestRule.onNodeWithTag("admin_meetup_card_m_started_admin").performScrollTo().assertIsDisplayed()
+    composeTestRule.onNodeWithTag("admin_meetup_card_m_completed_admin").performScrollTo().assertIsDisplayed()
+
+    // Filter to COMPLETED only
+    composeTestRule.onNodeWithTag("admin_meetup_filter_COMPLETED").performScrollTo().performClick()
+    composeTestRule.onNodeWithTag("admin_meetup_card_m_completed_admin").performScrollTo().assertIsDisplayed()
+    composeTestRule.onNodeWithTag("admin_meetup_card_m_started_admin").assertDoesNotExist()
   }
 }

@@ -28,11 +28,13 @@ import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Event
 import androidx.compose.material.icons.rounded.Flag
 import androidx.compose.material.icons.rounded.LocationOn
+import androidx.compose.material.icons.rounded.MyLocation
 import androidx.compose.material.icons.rounded.PhoneInTalk
 import androidx.compose.material.icons.rounded.Schedule
 import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.Shield
 import androidx.compose.material.icons.rounded.Sos
+import androidx.compose.material.icons.rounded.Timer
 import androidx.compose.material.icons.rounded.VerifiedUser
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -53,6 +55,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
@@ -215,6 +218,10 @@ fun ConnectionsScreen(
 
                   if (latestMeetup != null) {
                     Spacer(modifier = Modifier.height(10.dp))
+                    val liveNow by rememberTickerMillis(latestMeetup.isActiveOrOngoing())
+                    val countdownSummary = remember(latestMeetup, liveNow) {
+                      formatMeetupCountdownLabel(latestMeetup, liveNow)
+                    }
                     Card(
                       onClick = { onOpenMeetupDetails(latestMeetup) },
                       colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
@@ -236,6 +243,14 @@ fun ConnectionsScreen(
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                           )
+                          if (countdownSummary.isNotBlank()) {
+                            Text(
+                              text = countdownSummary,
+                              style = MaterialTheme.typography.labelMedium,
+                              color = if (latestMeetup.status == "STARTED") EmeraldOnline else MaterialTheme.colorScheme.primary,
+                              modifier = Modifier.testTag("connection_meetup_countdown"),
+                            )
+                          }
                         }
                         TextButton(onClick = { onOpenMeetupDetails(latestMeetup) }) { Text("View") }
                       }
@@ -480,6 +495,7 @@ fun MeetupPlanningScreen(
       if (timeInMillis <= now) add(Calendar.DAY_OF_YEAR, 1)
     }
     listOf(
+      MeetupTimePreset("In 5 min", "Today", timeFmt.format(now + 5 * 60_000L), now + 5 * 60_000L),
       MeetupTimePreset("In 15 min", "Today", timeFmt.format(now + 15 * 60_000L), now + 15 * 60_000L),
       MeetupTimePreset("In 30 min", "Today", timeFmt.format(now + 30 * 60_000L), now + 30 * 60_000L),
       MeetupTimePreset("In 1 hour", "Today", timeFmt.format(now + 60 * 60_000L), now + 60 * 60_000L),
@@ -492,10 +508,10 @@ fun MeetupPlanningScreen(
     )
   }
 
-  var selectedPresetIndex by remember { mutableIntStateOf(2) }
-  var dateText by remember { mutableStateOf(presets[2].dateText) }
-  var timeText by remember { mutableStateOf(presets[2].timeText) }
-  var scheduledAtMillis by remember { mutableLongStateOf(presets[2].offsetMillis) }
+  var selectedPresetIndex by remember { mutableIntStateOf(1) }
+  var dateText by remember { mutableStateOf(presets[1].dateText) }
+  var timeText by remember { mutableStateOf(presets[1].timeText) }
+  var scheduledAtMillis by remember { mutableLongStateOf(presets[1].offsetMillis) }
 
   var locationName by remember { mutableStateOf("Blue Tokai Coffee Roasters") }
   var publicArea by remember { mutableStateOf(myCityArea.ifBlank { "Sector 29, Gurugram" }) }
@@ -726,6 +742,7 @@ fun MeetupDetailsScreen(
   onMarkSafe: () -> Unit = onComplete,
   onShareWithTrustedContact: () -> Unit = {},
   onOpenEmergencyHelp: () -> Unit = {},
+  onCheckProximityNow: () -> Unit = {},
 ) {
   val context = LocalContext.current
   val isProposer = meetup.proposerUid == currentUserId
@@ -735,12 +752,15 @@ fun MeetupDetailsScreen(
   val reminderSent = meetup.hasReminderSentTo(currentUserId)
   val alertTriggered = meetup.hasTrustedAlertTriggeredFor(currentUserId)
   val peerName = meetup.peerNameFor(currentUserId)
+  val nowMillis by rememberTickerMillis(meetup.isActiveOrOngoing())
+  val countdownText = remember(meetup, nowMillis) { formatMeetupCountdownLabel(meetup, nowMillis) }
 
   val statusColors =
     when (meetup.status) {
-      "CONFIRMED" -> EmeraldContainer to EmeraldOnline
+      "STARTED" -> EmeraldContainer to EmeraldOnline
+      "CONFIRMED" -> CobaltBlueContainer to CobaltBlue
       "CANCELLED" -> CoralContainer to CoralAlert
-      "COMPLETED" -> MaterialTheme.colorScheme.primaryContainer to MaterialTheme.colorScheme.primary
+      "COMPLETED" -> EmeraldContainer to EmeraldOnline
       else -> AmberContainer to AmberWarm
     }
 
@@ -810,6 +830,92 @@ fun MeetupDetailsScreen(
           }
           if (meetup.notes.isNotBlank()) {
             Text("Note: \"${meetup.notes}\"", style = MaterialTheme.typography.bodyMedium)
+          }
+        }
+      }
+
+      // Live Countdown & 5-Meter Auto-Start Proximity Card
+      if (meetup.status != "CANCELLED") {
+        Card(
+          colors =
+            CardDefaults.cardColors(
+              containerColor =
+                if (meetup.status == "STARTED") EmeraldContainer
+                else MaterialTheme.colorScheme.surface,
+            ),
+          shape = MaterialTheme.shapes.large,
+          modifier = Modifier.fillMaxWidth().testTag("meetup_countdown_card"),
+        ) {
+          Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(
+              modifier = Modifier.fillMaxWidth(),
+              horizontalArrangement = Arrangement.SpaceBetween,
+              verticalAlignment = Alignment.CenterVertically,
+            ) {
+              Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Icon(
+                  imageVector = Icons.Rounded.Timer,
+                  contentDescription = null,
+                  tint = if (meetup.status == "STARTED") EmeraldOnline else MaterialTheme.colorScheme.primary,
+                )
+                Text(
+                  text = if (meetup.status == "STARTED") "Meetup Live Status" else "Meetup Countdown",
+                  style = MaterialTheme.typography.titleMedium,
+                )
+              }
+              StatusPill(
+                text = meetup.status,
+                containerColor = statusColors.first,
+                contentColor = statusColors.second,
+              )
+            }
+
+            if (countdownText.isNotBlank()) {
+              Text(
+                text = countdownText,
+                style = MaterialTheme.typography.headlineSmall,
+                color = if (meetup.status == "STARTED") EmeraldOnline else MaterialTheme.colorScheme.primary,
+                modifier = Modifier.testTag("meetup_countdown_text"),
+              )
+            }
+
+            val proximityMsg =
+              when {
+                meetup.status == "STARTED" -> {
+                  val distText =
+                    if (meetup.proximityDistanceMeters >= 0.0) {
+                      String.format(Locale.US, " (%.1f m apart)", meetup.proximityDistanceMeters)
+                    } else {
+                      ""
+                    }
+                  "Participants came within 5 meters$distText. Meetup is recorded as STARTED for both users and Admin safety logs."
+                }
+                meetup.status == "COMPLETED" ->
+                  "Meetup recorded as COMPLETED in Admin safety audit logs."
+                meetup.status == "CONFIRMED" && meetup.proximityDistanceMeters >= 0.0 -> {
+                  val distStr = String.format(Locale.US, "%.1f m", meetup.proximityDistanceMeters)
+                  "Live distance between you and $peerName: $distStr. Status changes to STARTED automatically within 5.0 m."
+                }
+                else ->
+                  "When confirmed and both users come within 5 meters, status changes to STARTED automatically and notifies both phones."
+              }
+            Text(
+              text = proximityMsg,
+              style = MaterialTheme.typography.bodyMedium,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+              modifier = Modifier.testTag("meetup_proximity_status"),
+            )
+
+            if (meetup.status == "CONFIRMED") {
+              OutlinedButton(
+                onClick = onCheckProximityNow,
+                modifier = Modifier.fillMaxWidth().height(48.dp).testTag("check_proximity_now_button"),
+              ) {
+                Icon(Icons.Rounded.MyLocation, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("Check 5m Proximity Now")
+              }
+            }
           }
         }
       }
@@ -965,7 +1071,7 @@ fun MeetupDetailsScreen(
         )
       }
 
-      if (meetup.status == "CONFIRMED" && !isSafe) {
+      if ((meetup.status == "CONFIRMED" || meetup.status == "STARTED") && !isSafe) {
         OutlinedButton(
           onClick = onComplete,
           modifier = Modifier.fillMaxWidth().height(48.dp),
@@ -974,7 +1080,7 @@ fun MeetupDetailsScreen(
         }
       }
 
-      if (meetup.status == "PROPOSED" || meetup.status == "CONFIRMED") {
+      if (meetup.status == "PROPOSED" || meetup.status == "CONFIRMED" || meetup.status == "STARTED") {
         OutlinedButton(
           onClick = onCancel,
           colors = ButtonDefaults.outlinedButtonColors(contentColor = CoralAlert),
@@ -1108,3 +1214,41 @@ fun ActivityHistoryScreen(
     }
   }
 }
+
+@Composable
+internal fun rememberTickerMillis(active: Boolean): androidx.compose.runtime.State<Long> {
+  val nowState = remember { mutableLongStateOf(System.currentTimeMillis()) }
+  LaunchedEffect(active) {
+    nowState.longValue = System.currentTimeMillis()
+    if (active) {
+      while (true) {
+        kotlinx.coroutines.delay(1000L)
+        nowState.longValue = System.currentTimeMillis()
+      }
+    }
+  }
+  return nowState
+}
+
+internal fun formatMeetupCountdownLabel(meetup: Meetup, nowMillis: Long): String {
+  return when (meetup.status) {
+    "STARTED" -> {
+      val startedAt = meetup.startedAtMillis.takeIf { it > 0L } ?: nowMillis
+      val elapsed = (nowMillis - startedAt).coerceAtLeast(0L)
+      "STARTED • Live ${com.example.util.LocationPrivacy.formatCountdownDuration(elapsed)}"
+    }
+    "COMPLETED" -> "Meetup Completed"
+    "CANCELLED" -> "Meetup Cancelled"
+    else -> {
+      val target = meetup.scheduledAtMillis
+      if (target <= 0L) return ""
+      val remaining = target - nowMillis
+      if (remaining > 0L) {
+        "Starts in ${com.example.util.LocationPrivacy.formatCountdownDuration(remaining)}"
+      } else {
+        "Meetup time arrived • Move within 5m to start"
+      }
+    }
+  }
+}
+

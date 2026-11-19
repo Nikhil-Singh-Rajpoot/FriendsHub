@@ -18,6 +18,9 @@ import java.util.Locale
 
 object SafetyNotificationHelper {
   const val CHANNEL_ID_SAFETY = "friendshub_meeting_safety"
+  const val CHANNEL_ID_MEETUP = "betweenus_meetup_alerts"
+  const val EXTRA_MEETUP_ID = "extra_meetup_id"
+  private const val PREFS_DISPATCHED = "betweenus_dispatched_notifications"
 
   fun ensureChannels(context: Context) {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -33,6 +36,17 @@ object SafetyNotificationHelper {
           }
         manager.createNotificationChannel(channel)
       }
+      if (manager.getNotificationChannel(CHANNEL_ID_MEETUP) == null) {
+        val meetupChannel =
+          NotificationChannel(
+            CHANNEL_ID_MEETUP,
+            "Meetup Countdown & Invites",
+            NotificationManager.IMPORTANCE_HIGH,
+          ).apply {
+            description = "Notifications when meetups are proposed, confirmed, starting soon, or STARTED."
+          }
+        manager.createNotificationChannel(meetupChannel)
+      }
     }
   }
 
@@ -45,12 +59,67 @@ object SafetyNotificationHelper {
     }
   }
 
+  fun wasNotificationDispatched(context: Context, key: String): Boolean {
+    if (key.isBlank()) return false
+    val prefs = context.applicationContext.getSharedPreferences(PREFS_DISPATCHED, Context.MODE_PRIVATE)
+    return prefs.getBoolean(key, false)
+  }
+
+  fun markNotificationDispatched(context: Context, key: String) {
+    if (key.isBlank()) return
+    val prefs = context.applicationContext.getSharedPreferences(PREFS_DISPATCHED, Context.MODE_PRIVATE)
+    prefs.edit().putBoolean(key, true).apply()
+  }
+
+  fun showMeetupSystemNotification(
+    context: Context,
+    title: String,
+    body: String,
+    notificationKey: String,
+    meetupId: String = "",
+  ) {
+    if (!hasNotificationPermission(context)) return
+    if (wasNotificationDispatched(context, notificationKey)) return
+    ensureChannels(context)
+
+    val openIntent =
+      Intent(context, MainActivity::class.java).apply {
+        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        if (meetupId.isNotBlank()) {
+          putExtra(EXTRA_MEETUP_ID, meetupId)
+        }
+      }
+    val pendingIntent =
+      PendingIntent.getActivity(
+        context,
+        notificationKey.hashCode(),
+        openIntent,
+        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+      )
+
+    val builder =
+      NotificationCompat.Builder(context, CHANNEL_ID_MEETUP)
+        .setSmallIcon(android.R.drawable.ic_dialog_info)
+        .setContentTitle(title)
+        .setContentText(body)
+        .setStyle(NotificationCompat.BigTextStyle().bigText(body))
+        .setPriority(NotificationCompat.PRIORITY_HIGH)
+        .setAutoCancel(true)
+        .setContentIntent(pendingIntent)
+
+    runCatching {
+      NotificationManagerCompat.from(context).notify(notificationKey.hashCode(), builder.build())
+      markNotificationDispatched(context, notificationKey)
+    }
+  }
+
   fun showCheckInReminderNotification(context: Context, meetup: Meetup) {
     if (!hasNotificationPermission(context)) return
     ensureChannels(context)
     val openIntent =
       Intent(context, MainActivity::class.java).apply {
         flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        putExtra(EXTRA_MEETUP_ID, meetup.id)
       }
     val pendingIntent =
       PendingIntent.getActivity(

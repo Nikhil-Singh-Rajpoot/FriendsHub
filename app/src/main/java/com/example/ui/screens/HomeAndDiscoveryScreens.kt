@@ -454,8 +454,13 @@ fun HomeDashboardScreen(
     if (upcomingMeetups.isNotEmpty()) {
       item {
         val next = upcomingMeetups.first()
+        val liveNow by rememberTickerMillis(next.isActiveOrOngoing())
+        val countdownLabel = remember(next, liveNow) { formatMeetupCountdownLabel(next, liveNow) }
         Card(
-          colors = CardDefaults.cardColors(containerColor = CobaltBlueContainer),
+          colors =
+            CardDefaults.cardColors(
+              containerColor = if (next.status == "STARTED") EmeraldContainer else CobaltBlueContainer,
+            ),
           shape = MaterialTheme.shapes.medium,
           modifier = Modifier.fillMaxWidth().clickable { onOpenMeetup(next) },
         ) {
@@ -463,7 +468,11 @@ fun HomeDashboardScreen(
             modifier = Modifier.padding(14.dp),
             verticalAlignment = Alignment.CenterVertically,
           ) {
-            Icon(Icons.Rounded.Schedule, contentDescription = null, tint = CobaltBlue)
+            Icon(
+              imageVector = Icons.Rounded.Schedule,
+              contentDescription = null,
+              tint = if (next.status == "STARTED") EmeraldOnline else CobaltBlue,
+            )
             Spacer(modifier = Modifier.width(12.dp))
             Column(modifier = Modifier.weight(1f)) {
               Text(
@@ -474,17 +483,33 @@ fun HomeDashboardScreen(
                 text = "${next.publicLocationName} • ${next.scheduledDateText}, ${next.scheduledTimeText}",
                 style = MaterialTheme.typography.bodyMedium,
               )
+              if (countdownLabel.isNotBlank()) {
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                  text = countdownLabel,
+                  style = MaterialTheme.typography.labelLarge,
+                  color = if (next.status == "STARTED") EmeraldOnline else CobaltBlue,
+                  modifier = Modifier.testTag("home_meetup_countdown"),
+                )
+              }
               Spacer(modifier = Modifier.height(6.dp))
               val safetyLabel =
                 when {
+                  next.status == "STARTED" -> "Meetup STARTED (Within 5m)"
                   next.isMarkedSafeBy(myProfile.uid) -> "Marked Safe"
                   next.isCheckedInBy(myProfile.uid) -> "Checked In on Arrival"
                   else -> "Check-In Pending"
                 }
               StatusPill(
                 text = safetyLabel,
-                containerColor = if (next.isCheckedInBy(myProfile.uid) || next.isMarkedSafeBy(myProfile.uid)) EmeraldContainer else AmberContainer,
-                contentColor = if (next.isCheckedInBy(myProfile.uid) || next.isMarkedSafeBy(myProfile.uid)) EmeraldOnline else AmberWarm,
+                containerColor =
+                  if (next.status == "STARTED" || next.isCheckedInBy(myProfile.uid) || next.isMarkedSafeBy(myProfile.uid))
+                    EmeraldContainer
+                  else AmberContainer,
+                contentColor =
+                  if (next.status == "STARTED" || next.isCheckedInBy(myProfile.uid) || next.isMarkedSafeBy(myProfile.uid))
+                    EmeraldOnline
+                  else AmberWarm,
               )
             }
           }

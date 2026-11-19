@@ -21,6 +21,7 @@ import com.example.data.remote.unwrapFirestoreException
 import com.example.data.repository.AdminDashboardSnapshot
 import com.example.data.repository.FriendsHubRepository
 import com.example.util.LocationPrivacy
+import com.example.util.MeetupBackgroundScheduler
 import com.example.util.SafetyNotificationHelper
 import com.example.voice.VoiceCallEngine
 import com.example.voice.WebRtcVoiceCallEngine
@@ -72,6 +73,7 @@ class FriendsHubViewModel(
   val viewerCityArea: StateFlow<String?> = _viewerCityArea.asStateFlow()
 
   private var liveLocationJob: Job? = null
+  private var meetupProximityJob: Job? = null
   private var lastSyncedCoords: Pair<Double, Double>? = null
   private var lastSyncedCityArea: String = ""
 
@@ -514,6 +516,101 @@ class FriendsHubViewModel(
   fun stopLiveLocationUpdates() {
     liveLocationJob?.cancel()
     liveLocationJob = null
+  }
+
+  fun startMeetupProximityTracking(context: Context) {
+    val appContext = context.applicationContext
+    val hasConfirmed = meetups.value.any { it.status == "CONFIRMED" }
+    if (!hasConfirmed) {
+      stopMeetupProximityTracking()
+      return
+    }
+    if (!LocationPrivacy.hasLocationPermission(appContext)) return
+    if (meetupProximityJob?.isActive == true) return
+
+    meetupProximityJob =
+      viewModelScope.launch {
+        LocationPrivacy.observeLiveExactLocation(appContext)
+          .catch { /* keep existing state */ }
+          .collect { (lat, lng) ->
+            val myName = (myProfileState.value as? UiState.Success)?.data?.firstName ?: "Friend"
+            val confirmed = meetups.value.filter { it.status == "CONFIRMED" }
+            if (confirmed.isEmpty()) {
+              stopMeetupProximityTracking()
+              return@collect
+            }
+            confirmed.forEach { meetup ->
+              val startedNow =
+                repository.updateMeetupProximityAndAutoStart(meetup.id, lat, lng, myName).getOrDefault(false)
+              if (startedNow) {
+                val peerName = meetup.peerNameFor(currentUserId)
+                _statusMessage.value = "Within 5m of $peerName! Meetup STARTED."
+                SafetyNotificationHelper.showMeetupSystemNotification(
+                  context = appContext,
+                  title = "Meetup STARTED!",
+                  body = "You and $peerName are within 5 meters at ${meetup.publicLocationName}.",
+                  notificationKey = "started_local_${meetup.id}",
+                  meetupId = meetup.id,
+                )
+              }
+            }
+          }
+      }
+  }
+
+  fun stopMeetupProximityTracking() {
+    meetupProximityJob?.cancel()
+    meetupProximityJob = null
+  }
+
+  fun refreshMeetupProximityOnce(context: Context, meetup: Meetup) {
+    val appContext = context.applicationContext
+    viewModelScope.launch {
+      val coords =
+        withTimeoutOrNull(5000L) { LocationPrivacy.fetchRawDeviceLocation(appContext) }
+          ?: _viewerLocation.value
+      if (coords == null) {
+        _statusMessage.value = "Enable location permission to verify 5m meetup proximity."
+        return@launch
+      }
+      val myName = (myProfileState.value as? UiState.Success)?.data?.firstName ?: "Friend"
+      val startedNow =
+        repository.updateMeetupProximityAndAutoStart(meetup.id, coords.first, coords.second, myName)
+          .getOrDefault(false)
+      if (startedNow) {
+        val peerName = meetup.peerNameFor(currentUserId)
+        _statusMessage.value = "Within 5 meters of $peerName! Meetup is now STARTED."
+        SafetyNotificationHelper.showMeetupSystemNotification(
+          context = appContext,
+          title = "Meetup STARTED!",
+          body = "You and $peerName are within 5 meters at ${meetup.publicLocationName}.",
+          notificationKey = "started_local_${meetup.id}",
+          meetupId = meetup.id,
+        )
+      } else {
+        _statusMessage.value = "Updated your live arrival distance for ${meetup.publicLocationName}."
+      }
+    }
+  }
+
+  fun syncMeetupNotificationsAndAlarms(context: Context) {
+    val appContext = context.applicationContext
+    MeetupBackgroundScheduler.syncScheduledMeetupNotifications(
+      context = appContext,
+      meetups = meetups.value,
+      currentUid = currentUserId,
+    )
+    notifications.value
+      .filter { !it.isRead && (it.type.startsWith("MEETUP_") || it.type == "TRUSTED_CONTACT_ALERT") }
+      .forEach { notif ->
+        SafetyNotificationHelper.showMeetupSystemNotification(
+          context = appContext,
+          title = notif.title.ifBlank { "Between-Us Meetup Update" },
+          body = notif.body,
+          notificationKey = "notif_${notif.id}",
+          meetupId = notif.referenceId,
+        )
+      }
   }
 
   fun refreshViewerLocation(context: Context, showFeedback: Boolean = false) {

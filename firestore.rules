@@ -165,9 +165,20 @@ service cloud.firestore {
              data.publicLocationName is string && data.publicLocationName.size() >= 2 && data.publicLocationName.size() <= 120 &&
              data.publicArea is string && data.publicArea.size() >= 2 && data.publicArea.size() <= 100 &&
              data.notes is string && data.notes.size() <= 300 &&
-             data.status in ['PROPOSED', 'CONFIRMED', 'CANCELLED', 'COMPLETED'] &&
+             data.status in ['PROPOSED', 'CONFIRMED', 'STARTED', 'CANCELLED', 'COMPLETED'] &&
              (!('confirmedByUid' in data) || (data.confirmedByUid is string && data.confirmedByUid.size() <= 128)) &&
              (!('cancelledByUid' in data) || (data.cancelledByUid is string && data.cancelledByUid.size() <= 128)) &&
+             (!('proposerLat' in data) || (data.proposerLat is number && data.proposerLat >= -90.0 && data.proposerLat <= 90.0)) &&
+             (!('proposerLng' in data) || (data.proposerLng is number && data.proposerLng >= -180.0 && data.proposerLng <= 180.0)) &&
+             (!('proposerLocationUpdatedAtMillis' in data) || (data.proposerLocationUpdatedAtMillis is int && data.proposerLocationUpdatedAtMillis >= 0)) &&
+             (!('otherLat' in data) || (data.otherLat is number && data.otherLat >= -90.0 && data.otherLat <= 90.0)) &&
+             (!('otherLng' in data) || (data.otherLng is number && data.otherLng >= -180.0 && data.otherLng <= 180.0)) &&
+             (!('otherLocationUpdatedAtMillis' in data) || (data.otherLocationUpdatedAtMillis is int && data.otherLocationUpdatedAtMillis >= 0)) &&
+             (!('proximityDistanceMeters' in data) || (data.proximityDistanceMeters is number && data.proximityDistanceMeters >= -1.0)) &&
+             (!('startedAtMillis' in data) || (data.startedAtMillis is int && data.startedAtMillis >= 0)) &&
+             (!('startedLat' in data) || (data.startedLat is number && data.startedLat >= -90.0 && data.startedLat <= 90.0)) &&
+             (!('startedLng' in data) || (data.startedLng is number && data.startedLng >= -180.0 && data.startedLng <= 180.0)) &&
+             (!('completedAtMillis' in data) || (data.completedAtMillis is int && data.completedAtMillis >= 0)) &&
              (!('sharedWithTrustedContactUids' in data) || (data.sharedWithTrustedContactUids is list && data.sharedWithTrustedContactUids.size() <= 2)) &&
              (!('checkedInUids' in data) || (data.checkedInUids is list && data.checkedInUids.size() <= 2)) &&
              (!('checkedInAtMillis' in data) || (data.checkedInAtMillis is int && data.checkedInAtMillis >= 0)) &&
@@ -428,7 +439,7 @@ service cloud.firestore {
                        incoming().proposerUid == request.auth.uid &&
                        incoming().status == 'PROPOSED' &&
                        incoming().keys().hasAll(['connectionId', 'participantUids', 'proposerUid', 'proposerName', 'otherUid', 'otherName', 'activity', 'scheduledDateText', 'scheduledTimeText', 'publicLocationName', 'publicArea', 'notes', 'status', 'createdAt', 'updatedAt']) &&
-                       incoming().keys().hasOnly(['connectionId', 'participantUids', 'proposerUid', 'proposerName', 'otherUid', 'otherName', 'activity', 'scheduledDateText', 'scheduledTimeText', 'scheduledAtMillis', 'publicLocationName', 'publicArea', 'notes', 'status', 'confirmedByUid', 'cancelledByUid', 'sharedWithTrustedContactUids', 'checkedInUids', 'checkedInAtMillis', 'safeUids', 'safeMarkedAtMillis', 'reminderSentUids', 'reminderSentAtMillis', 'trustedAlertUids', 'trustedAlertSentAtMillis', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['connectionId', 'participantUids', 'proposerUid', 'proposerName', 'otherUid', 'otherName', 'activity', 'scheduledDateText', 'scheduledTimeText', 'scheduledAtMillis', 'publicLocationName', 'publicArea', 'notes', 'status', 'confirmedByUid', 'cancelledByUid', 'proposerLat', 'proposerLng', 'proposerLocationUpdatedAtMillis', 'otherLat', 'otherLng', 'otherLocationUpdatedAtMillis', 'proximityDistanceMeters', 'startedAtMillis', 'startedLat', 'startedLng', 'completedAtMillis', 'sharedWithTrustedContactUids', 'checkedInUids', 'checkedInAtMillis', 'safeUids', 'safeMarkedAtMillis', 'reminderSentUids', 'reminderSentAtMillis', 'trustedAlertUids', 'trustedAlertSentAtMillis', 'createdAt', 'updatedAt']) &&
                        isValidMeetup(incoming()) &&
                        !isBlockedPair(incoming().proposerUid, incoming().otherUid) &&
                        exists(/databases/$(database)/documents/connections/$(incoming().connectionId)) &&
@@ -446,9 +457,10 @@ service cloud.firestore {
                           incoming().createdAt == existing().createdAt &&
                           (
                             (existing().status == 'PROPOSED' && request.auth.uid != existing().proposerUid && incoming().status == 'CONFIRMED' && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'confirmedByUid', 'updatedAt'])) ||
-                            (existing().status in ['PROPOSED', 'CONFIRMED'] && incoming().status == 'CANCELLED' && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'cancelledByUid', 'updatedAt'])) ||
-                            (existing().status == 'CONFIRMED' && incoming().status == 'COMPLETED' && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'safeUids', 'safeMarkedAtMillis', 'updatedAt'])) ||
-                            (existing().status in ['PROPOSED', 'CONFIRMED', 'COMPLETED'] && incoming().status == existing().status && incoming().diff(existing()).affectedKeys().hasOnly(['sharedWithTrustedContactUids', 'checkedInUids', 'checkedInAtMillis', 'safeUids', 'safeMarkedAtMillis', 'reminderSentUids', 'reminderSentAtMillis', 'trustedAlertUids', 'trustedAlertSentAtMillis', 'updatedAt']))
+                            (existing().status == 'CONFIRMED' && incoming().status == 'STARTED' && incoming().proximityDistanceMeters <= 5.0 && incoming().startedAtMillis > 0 && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'proposerLat', 'proposerLng', 'proposerLocationUpdatedAtMillis', 'otherLat', 'otherLng', 'otherLocationUpdatedAtMillis', 'proximityDistanceMeters', 'startedAtMillis', 'startedLat', 'startedLng', 'checkedInUids', 'checkedInAtMillis', 'updatedAt'])) ||
+                            (existing().status in ['PROPOSED', 'CONFIRMED', 'STARTED'] && incoming().status == 'CANCELLED' && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'cancelledByUid', 'updatedAt'])) ||
+                            (existing().status in ['CONFIRMED', 'STARTED'] && incoming().status == 'COMPLETED' && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'safeUids', 'safeMarkedAtMillis', 'completedAtMillis', 'updatedAt'])) ||
+                            (existing().status in ['PROPOSED', 'CONFIRMED', 'STARTED', 'COMPLETED'] && incoming().status == existing().status && incoming().diff(existing()).affectedKeys().hasOnly(['proposerLat', 'proposerLng', 'proposerLocationUpdatedAtMillis', 'otherLat', 'otherLng', 'otherLocationUpdatedAtMillis', 'proximityDistanceMeters', 'sharedWithTrustedContactUids', 'checkedInUids', 'checkedInAtMillis', 'safeUids', 'safeMarkedAtMillis', 'reminderSentUids', 'reminderSentAtMillis', 'trustedAlertUids', 'trustedAlertSentAtMillis', 'updatedAt']))
                           ))
                        );
 

@@ -153,7 +153,7 @@ internal fun FirebaseAuth.authStateFlow(): Flow<FirebaseUser?> = callbackFlow {
 }
 
 @Composable
-fun FriendsHubApp() {
+fun FriendsHubApp(initialMeetupId: String? = null) {
   val context = LocalContext.current
   val scope = rememberCoroutineScope()
   val credentialManager = remember { CredentialManager.create(context) }
@@ -218,6 +218,7 @@ fun FriendsHubApp() {
         viewModel = viewModel,
         userDisplayName = user.displayName.orEmpty(),
         userEmail = user.email.orEmpty(),
+        initialMeetupId = initialMeetupId,
         onSignOut = {
           GoogleSignInHelper.signOut(credentialManager, scope)
         },
@@ -264,6 +265,7 @@ private fun AuthenticatedAppShell(
   viewModel: FriendsHubViewModel,
   userDisplayName: String,
   userEmail: String,
+  initialMeetupId: String? = null,
   onSignOut: () -> Unit,
 ) {
   val context = LocalContext.current
@@ -371,7 +373,7 @@ private fun AuthenticatedAppShell(
         profile = myProfile,
         liveCityArea = viewerCityArea ?: myProfile.cityArea,
         liveCoordinates = viewerLocation ?: myProfile.approxLat.takeIf { it != 0.0 }?.let { it to myProfile.approxLng },
-        activeMeetup = meetups.firstOrNull { it.status == "PROPOSED" || it.status == "CONFIRMED" },
+        activeMeetup = meetups.firstOrNull { it.isActiveOrOngoing() },
         onBack = { showCallEmergencyHelp = false },
         onMarkMeetupSafe = { m -> viewModel.markMeetupSafe(m) },
         onOpenSettingsForTrustedContact = { showCallEmergencyHelp = false },
@@ -396,7 +398,11 @@ private fun AuthenticatedAppShell(
   }
 
   var currentTab by remember { mutableStateOf(MainTab.HOME) }
-  var activeSubScreen by remember { mutableStateOf<SubScreen?>(null) }
+  var activeSubScreen by remember(initialMeetupId) {
+    mutableStateOf<SubScreen?>(
+      initialMeetupId?.takeIf { it.isNotBlank() }?.let { SubScreen.MeetupDetails(it) }
+    )
+  }
   var quickConnectTarget by remember { mutableStateOf<UserProfile?>(null) }
   var verifyGateMessage by remember { mutableStateOf<String?>(null) }
   var verifyGateCanSelfVerify by remember { mutableStateOf(false) }
@@ -404,16 +410,21 @@ private fun AuthenticatedAppShell(
   val notificationPermissionLauncher =
     rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {}
 
-  val hasConfirmedMeetups = meetups.any { it.status == "CONFIRMED" }
-  LaunchedEffect(hasConfirmedMeetups) {
+  val hasActiveMeetups = meetups.any { it.isActiveOrOngoing() }
+  LaunchedEffect(hasActiveMeetups) {
     if (
-      hasConfirmedMeetups &&
+      hasActiveMeetups &&
       Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
       ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) !=
         PackageManager.PERMISSION_GRANTED
     ) {
       notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
     }
+  }
+
+  LaunchedEffect(meetups, notifications) {
+    viewModel.syncMeetupNotificationsAndAlarms(context)
+    viewModel.startMeetupProximityTracking(context)
   }
 
   LaunchedEffect(myProfile.uid, meetups, account) {
@@ -429,17 +440,24 @@ private fun AuthenticatedAppShell(
       when (event) {
         Lifecycle.Event.ON_RESUME -> {
           viewModel.startLiveLocationUpdates(context)
+          viewModel.startMeetupProximityTracking(context)
+          viewModel.syncMeetupNotificationsAndAlarms(context)
           viewModel.evaluateMissedMeetupCheckIns(context)
         }
-        Lifecycle.Event.ON_STOP -> viewModel.stopLiveLocationUpdates()
+        Lifecycle.Event.ON_STOP -> {
+          viewModel.stopLiveLocationUpdates()
+          viewModel.stopMeetupProximityTracking()
+        }
         else -> Unit
       }
     }
     lifecycleOwner.lifecycle.addObserver(observer)
     viewModel.startLiveLocationUpdates(context)
+    viewModel.startMeetupProximityTracking(context)
     onDispose {
       lifecycleOwner.lifecycle.removeObserver(observer)
       viewModel.stopLiveLocationUpdates()
+      viewModel.stopMeetupProximityTracking()
     }
   }
 
@@ -455,7 +473,7 @@ private fun AuthenticatedAppShell(
 
   val pendingIncomingCount = requests.count { it.toUid == viewModel.currentUserId && it.status == "PENDING" }
   val activeConnectionsCount = connections.count { it.status == "ACTIVE" }
-  val upcomingMeetups = meetups.filter { it.status == "PROPOSED" || it.status == "CONFIRMED" }
+  val upcomingMeetups = meetups.filter { it.isActiveOrOngoing() }
   val unreadNotifications = notifications.count { !it.isRead }
 
   fun attemptConnect(target: UserProfile) {
@@ -568,6 +586,7 @@ private fun AuthenticatedAppShell(
             onMarkSafe = { viewModel.markMeetupSafe(meetup) },
             onShareWithTrustedContact = { viewModel.markMeetupSharedWithTrustedContact(meetup) },
             onOpenEmergencyHelp = { activeSubScreen = SubScreen.EmergencyHelp },
+            onCheckProximityNow = { viewModel.refreshMeetupProximityOnce(context, meetup) },
           )
         }
       }

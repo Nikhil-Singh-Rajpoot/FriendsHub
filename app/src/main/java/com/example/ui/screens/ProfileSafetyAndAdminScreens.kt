@@ -68,6 +68,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -1014,17 +1015,138 @@ fun AdminModerationScreen(
         Text("Admin authorization required to view moderation tools.")
       }
     } else {
+      val startedCount = snapshot.meetups.count { it.status == "STARTED" }
+      val completedCount = snapshot.meetups.count { it.status == "COMPLETED" }
+      val alertMeetupsCount = snapshot.meetups.count { it.trustedAlertUids.isNotEmpty() || it.reminderSentUids.isNotEmpty() }
+      var selectedMeetupFilter by remember { mutableStateOf("ALL") }
+      val filteredMeetups =
+        remember(snapshot.meetups, selectedMeetupFilter) {
+          when (selectedMeetupFilter) {
+            "ALERTS" -> snapshot.meetups.filter { it.trustedAlertUids.isNotEmpty() || it.reminderSentUids.isNotEmpty() }
+            "ALL" -> snapshot.meetups
+            else -> snapshot.meetups.filter { it.status == selectedMeetupFilter }
+          }
+        }
+      val auditTimeFmt = remember { java.text.SimpleDateFormat("dd MMM, h:mm a", java.util.Locale.getDefault()) }
+
       LazyColumn(
         modifier = Modifier.fillMaxSize().padding(innerPadding),
         contentPadding = PaddingValues(18.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
       ) {
         item {
-          Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            AdminStat("Users", snapshot.users.size, Modifier.weight(1f))
-            AdminStat("Connections", snapshot.totalConnections, Modifier.weight(1f))
-            AdminStat("Meetups", snapshot.totalMeetups, Modifier.weight(1f))
-            AdminStat("Reports", snapshot.reports.count { it.status == "OPEN" }, Modifier.weight(1f))
+          Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+              AdminStat("Users", snapshot.users.size, Modifier.weight(1f))
+              AdminStat("Connections", snapshot.totalConnections, Modifier.weight(1f))
+              AdminStat("Meetups", snapshot.totalMeetups, Modifier.weight(1f))
+              AdminStat("Open Reports", snapshot.reports.count { it.status == "OPEN" }, Modifier.weight(1f))
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+              AdminStat("Started", startedCount, Modifier.weight(1f))
+              AdminStat("Completed", completedCount, Modifier.weight(1f))
+              AdminStat("Safety Alerts", alertMeetupsCount, Modifier.weight(1f))
+            }
+          }
+        }
+
+        item {
+          Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(
+              text = "Meetup Monitor & Investigation Records (${snapshot.meetups.size})",
+              style = MaterialTheme.typography.titleLarge,
+            )
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+              listOf("ALL", "STARTED", "COMPLETED", "CONFIRMED", "PROPOSED", "CANCELLED", "ALERTS").forEach { filter ->
+                FilterChip(
+                  selected = selectedMeetupFilter == filter,
+                  onClick = { selectedMeetupFilter = filter },
+                  label = { Text(filter) },
+                  modifier = Modifier.testTag("admin_meetup_filter_$filter"),
+                )
+              }
+            }
+          }
+        }
+
+        if (filteredMeetups.isEmpty()) {
+          item { Text("No meetup records in this filter.", style = MaterialTheme.typography.bodyMedium) }
+        } else {
+          items(filteredMeetups, key = { "admin_m_${it.id}" }) { m ->
+            val pillColors =
+              when (m.status) {
+                "STARTED" -> EmeraldContainer to EmeraldOnline
+                "COMPLETED" -> EmeraldContainer to EmeraldOnline
+                "CONFIRMED" -> CobaltBlue to Color.White
+                "CANCELLED" -> CoralContainer to CoralAlert
+                else -> AmberContainer to AmberWarm
+              }
+            Card(
+              colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+              shape = MaterialTheme.shapes.medium,
+              modifier = Modifier.fillMaxWidth().testTag("admin_meetup_card_${m.id}"),
+            ) {
+              Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Row(
+                  modifier = Modifier.fillMaxWidth(),
+                  horizontalArrangement = Arrangement.SpaceBetween,
+                  verticalAlignment = Alignment.CenterVertically,
+                ) {
+                  Text("${m.activity}: ${m.proposerName} ↔ ${m.otherName}", style = MaterialTheme.typography.titleMedium)
+                  StatusPill(
+                    text = m.status,
+                    containerColor = pillColors.first,
+                    contentColor = pillColors.second,
+                  )
+                }
+                Text(
+                  text = "Venue: ${m.publicLocationName} (${m.publicArea})",
+                  style = MaterialTheme.typography.bodyMedium,
+                )
+                Text(
+                  text = "Scheduled: ${m.scheduledDateText} at ${m.scheduledTimeText} • Meetup ID: ${m.id.take(10)}",
+                  style = MaterialTheme.typography.bodySmall,
+                  color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                  text = "Participant UIDs: ${m.proposerUid.take(10)} & ${m.otherUid.take(10)}",
+                  style = MaterialTheme.typography.bodySmall,
+                  color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                if (m.startedAtMillis > 0L) {
+                  val distPart =
+                    if (m.proximityDistanceMeters >= 0.0) {
+                      String.format(java.util.Locale.US, " (%.1f m apart)", m.proximityDistanceMeters)
+                    } else ""
+                  val coordPart =
+                    if (m.startedLat != 0.0 || m.startedLng != 0.0) {
+                      String.format(java.util.Locale.US, " @ %.5f, %.5f", m.startedLat, m.startedLng)
+                    } else ""
+                  Text(
+                    text = "Started: ${auditTimeFmt.format(m.startedAtMillis)}$distPart$coordPart",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = EmeraldOnline,
+                  )
+                }
+                if (m.completedAtMillis > 0L) {
+                  Text(
+                    text = "Completed: ${auditTimeFmt.format(m.completedAtMillis)}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = CobaltBlue,
+                  )
+                }
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                  StatusPill(text = "Checked-In: ${m.checkedInUids.size}/2")
+                  StatusPill(text = "Marked Safe: ${m.safeUids.size}/2")
+                  if (m.sharedWithTrustedContactUids.isNotEmpty()) {
+                    StatusPill(text = "Trusted Contact Shared", containerColor = EmeraldContainer, contentColor = EmeraldOnline)
+                  }
+                  if (m.trustedAlertUids.isNotEmpty()) {
+                    StatusPill(text = "SOS/Missed Alert Triggered", containerColor = CoralContainer, contentColor = CoralAlert)
+                  }
+                }
+              }
+            }
           }
         }
 

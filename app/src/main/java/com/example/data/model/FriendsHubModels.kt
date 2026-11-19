@@ -198,6 +198,17 @@ data class Meetup(
   val status: String = "PROPOSED",
   val confirmedByUid: String = "",
   val cancelledByUid: String = "",
+  val proposerLat: Double = 0.0,
+  val proposerLng: Double = 0.0,
+  val proposerLocationUpdatedAtMillis: Long = 0L,
+  val otherLat: Double = 0.0,
+  val otherLng: Double = 0.0,
+  val otherLocationUpdatedAtMillis: Long = 0L,
+  val proximityDistanceMeters: Double = -1.0,
+  val startedAtMillis: Long = 0L,
+  val startedLat: Double = 0.0,
+  val startedLng: Double = 0.0,
+  val completedAtMillis: Long = 0L,
   val sharedWithTrustedContactUids: List<String> = emptyList(),
   val checkedInUids: List<String> = emptyList(),
   val checkedInAtMillis: Long = 0L,
@@ -216,6 +227,8 @@ data class Meetup(
   fun isSharedWithTrustedBy(uid: String): Boolean = uid in sharedWithTrustedContactUids
   fun hasReminderSentTo(uid: String): Boolean = uid in reminderSentUids
   fun hasTrustedAlertTriggeredFor(uid: String): Boolean = uid in trustedAlertUids
+  fun isStarted(): Boolean = status == "STARTED"
+  fun isActiveOrOngoing(): Boolean = status == "PROPOSED" || status == "CONFIRMED" || status == "STARTED"
 }
 
 @IgnoreExtraProperties

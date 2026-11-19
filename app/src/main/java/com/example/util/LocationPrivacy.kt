@@ -34,6 +34,21 @@ object LocationPrivacy {
     return round(value * 500.0) / 500.0
   }
 
+  const val MEETUP_PROXIMITY_START_METERS = 5.0
+
+  /** Computes Haversine distance in meters between two exact coordinates (used for <= 5m meetup start). */
+  fun distanceMeters(lat1: Double, lng1: Double, lat2: Double, lng2: Double): Double {
+    if ((lat1 == 0.0 && lng1 == 0.0) || (lat2 == 0.0 && lng2 == 0.0)) return Double.MAX_VALUE
+    val earthRadiusMeters = 6_371_000.0
+    val dLat = Math.toRadians(lat2 - lat1)
+    val dLng = Math.toRadians(lng2 - lng1)
+    val a =
+      sin(dLat / 2) * sin(dLat / 2) +
+        cos(Math.toRadians(lat1)) * cos(Math.toRadians(lat2)) * sin(dLng / 2) * sin(dLng / 2)
+    val c = 2 * atan2(sqrt(a), sqrt(1 - a))
+    return earthRadiusMeters * c
+  }
+
   /** Computes Haversine distance in kilometers between two approximate coordinates. */
   fun distanceKm(lat1: Double, lng1: Double, lat2: Double, lng2: Double): Double {
     if (lat1 == 0.0 && lng1 == 0.0) return 999.0
@@ -46,6 +61,18 @@ object LocationPrivacy {
         cos(Math.toRadians(lat1)) * cos(Math.toRadians(lat2)) * sin(dLng / 2) * sin(dLng / 2)
     val c = 2 * atan2(sqrt(a), sqrt(1 - a))
     return earthRadiusKm * c
+  }
+
+  fun formatCountdownDuration(remainingMillis: Long): String {
+    val totalSeconds = (remainingMillis / 1000L).coerceAtLeast(0L)
+    val hours = totalSeconds / 3600L
+    val minutes = (totalSeconds % 3600L) / 60L
+    val seconds = totalSeconds % 60L
+    return if (hours > 0L) {
+      String.format(Locale.US, "%02d:%02d:%02d", hours, minutes, seconds)
+    } else {
+      String.format(Locale.US, "%02d:%02d", minutes, seconds)
+    }
   }
 
   fun formatApproxDistance(km: Double): String {
@@ -453,6 +480,41 @@ object LocationPrivacy {
         override fun onLocationResult(result: LocationResult) {
           val loc = result.lastLocation ?: return
           launch { emitAddress(loc.latitude, loc.longitude) }
+        }
+      }
+
+    client.requestLocationUpdates(request, callback, Looper.getMainLooper())
+    awaitClose { client.removeLocationUpdates(callback) }
+  }
+
+  /**
+   * Streams raw high-accuracy GPS coordinates strictly for active confirmed meetup 5-meter
+   * proximity verification between two participants.
+   */
+  @SuppressLint("MissingPermission")
+  fun observeLiveExactLocation(context: Context): Flow<Pair<Double, Double>> = callbackFlow {
+    val appContext = context.applicationContext
+    if (!hasLocationPermission(appContext)) {
+      close()
+      return@callbackFlow
+    }
+    val client = LocationServices.getFusedLocationProviderClient(appContext)
+    launch {
+      fetchRawDeviceLocation(appContext)?.let { coords ->
+        trySend(coords)
+      }
+    }
+    val request =
+      LocationRequest.Builder(preferredLocationPriority(appContext), 3_000L)
+        .setMinUpdateIntervalMillis(1_500L)
+        .setMinUpdateDistanceMeters(1.5f)
+        .build()
+
+    val callback =
+      object : LocationCallback() {
+        override fun onLocationResult(result: LocationResult) {
+          val loc = result.lastLocation ?: return
+          trySend(loc.latitude to loc.longitude)
         }
       }
 

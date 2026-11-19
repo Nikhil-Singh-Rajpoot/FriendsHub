@@ -323,8 +323,18 @@ fun IdentityVerificationScreen(
 
                     override fun onVerificationFailed(e: FirebaseException) {
                       isSendingOtp = false
+                      val rawMsg = e.localizedMessage.orEmpty()
                       phoneError =
-                        e.localizedMessage ?: "Could not send SMS OTP. Check number & Firebase Phone Auth setup."
+                        when {
+                          rawMsg.contains("region", ignoreCase = true) ||
+                            rawMsg.contains("BILLING_NOT_ENABLED", ignoreCase = true) ->
+                            "Firebase blocked SMS for this country or plan. Enable your country under Firebase Console → Authentication → Settings → SMS region policy (real SMS requires the Blaze plan; Firebase Test Phone Numbers work free)."
+                          rawMsg.contains("operation is not allowed", ignoreCase = true) ||
+                            rawMsg.contains("OPERATION_NOT_ALLOWED", ignoreCase = true) ->
+                            "Phone Sign-In is disabled in Firebase Console. Enable Phone under Authentication → Sign-in method."
+                          else ->
+                            rawMsg.ifBlank { "Could not send SMS OTP. Check number & Firebase Phone Auth setup." }
+                        }
                     }
 
                     override fun onCodeSent(

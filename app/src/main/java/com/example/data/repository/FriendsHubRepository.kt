@@ -799,6 +799,17 @@ class FriendsHubRepository(private val db: FirebaseFirestore) {
         "publicArea" to publicArea.trim().take(100),
         "notes" to notes.trim().take(300),
         "status" to "PROPOSED",
+        "proposerLat" to 0.0,
+        "proposerLng" to 0.0,
+        "proposerLocationUpdatedAtMillis" to 0L,
+        "otherLat" to 0.0,
+        "otherLng" to 0.0,
+        "otherLocationUpdatedAtMillis" to 0L,
+        "proximityDistanceMeters" to -1.0,
+        "startedAtMillis" to 0L,
+        "startedLat" to 0.0,
+        "startedLng" to 0.0,
+        "completedAtMillis" to 0L,
         "sharedWithTrustedContactUids" to if (sharedWithTrustedContact) listOf(uid) else emptyList(),
         "checkedInUids" to emptyList<String>(),
         "checkedInAtMillis" to 0L,
@@ -908,23 +919,115 @@ class FriendsHubRepository(private val db: FirebaseFirestore) {
     }
   }
 
+  /**
+   * Updates this participant's live meetup coordinates and transitions CONFIRMED -> STARTED
+   * automatically when both participants are within 5 meters of each other.
+   * Returns true if this update triggered the STARTED transition.
+   */
+  suspend fun updateMeetupProximityAndAutoStart(
+    meetupId: String,
+    myLat: Double,
+    myLng: Double,
+    myName: String,
+  ): Result<Boolean> = runCatching {
+    val uid = requireUserId()
+    val docRef = db.collection("meetups").document(meetupId)
+    try {
+      val latest =
+        docRef.get().await().toObject(Meetup::class.java, ServerTimestampBehavior.ESTIMATE)
+          ?: return@runCatching false
+      if (latest.status != "CONFIRMED") return@runCatching false
+      if (uid != latest.proposerUid && uid != latest.otherUid) return@runCatching false
+
+      val now = System.currentTimeMillis()
+      val isProposer = uid == latest.proposerUid
+      val pLat = if (isProposer) myLat else latest.proposerLat
+      val pLng = if (isProposer) myLng else latest.proposerLng
+      val pUpdated = if (isProposer) now else latest.proposerLocationUpdatedAtMillis
+      val oLat = if (!isProposer) myLat else latest.otherLat
+      val oLng = if (!isProposer) myLng else latest.otherLng
+      val oUpdated = if (!isProposer) now else latest.otherLocationUpdatedAtMillis
+
+      val peerUpdated = if (isProposer) oUpdated else pUpdated
+      val peerFresh = peerUpdated > 0L && kotlin.math.abs(now - peerUpdated) <= 15 * 60_000L
+      val bothHaveCoords = (pLat != 0.0 || pLng != 0.0) && (oLat != 0.0 || oLng != 0.0) && peerFresh
+
+      val distMeters =
+        if (bothHaveCoords) LocationPrivacy.distanceMeters(pLat, pLng, oLat, oLng)
+        else -1.0
+
+      val reachedFiveMeters =
+        distMeters in 0.0..LocationPrivacy.MEETUP_PROXIMITY_START_METERS
+
+      val updates =
+        mutableMapOf<String, Any>(
+          "updatedAt" to FieldValue.serverTimestamp(),
+        )
+      if (isProposer) {
+        updates["proposerLat"] = myLat
+        updates["proposerLng"] = myLng
+        updates["proposerLocationUpdatedAtMillis"] = now
+      } else {
+        updates["otherLat"] = myLat
+        updates["otherLng"] = myLng
+        updates["otherLocationUpdatedAtMillis"] = now
+      }
+      if (distMeters >= 0.0) {
+        updates["proximityDistanceMeters"] = distMeters
+      }
+
+      if (reachedFiveMeters) {
+        updates["status"] = "STARTED"
+        updates["startedAtMillis"] = now
+        updates["startedLat"] = (pLat + oLat) / 2.0
+        updates["startedLng"] = (pLng + oLng) / 2.0
+        updates["checkedInUids"] = listOf(latest.proposerUid, latest.otherUid).distinct().take(2)
+        updates["checkedInAtMillis"] = now
+      }
+
+      docRef.set(updates, SetOptions.merge()).await()
+
+      if (reachedFiveMeters) {
+        val peerUid = if (isProposer) latest.otherUid else latest.proposerUid
+        val distStr = String.format(java.util.Locale.US, "%.1f m", distMeters)
+        createNotificationInternal(
+          recipientUid = peerUid,
+          actorUid = uid,
+          actorName = myName,
+          type = "MEETUP_STARTED",
+          title = "Meetup STARTED!",
+          body = "You and $myName are within $distStr at ${latest.publicLocationName}. Enjoy your ${latest.activity}!",
+          referenceId = latest.id,
+        )
+      }
+      reachedFiveMeters
+    } catch (e: CancellationException) {
+      throw e
+    } catch (e: Exception) {
+      handleFirestoreError(e, OperationType.UPDATE, docRef.path)
+      throw e
+    }
+  }
+
   suspend fun markMeetupSafe(meetup: Meetup): Result<Unit> = runCatching {
     val uid = requireUserId()
+    val now = System.currentTimeMillis()
     val updatedSafe = (meetup.safeUids + uid).distinct().take(2)
-    val nextStatus = if (meetup.status == "CONFIRMED") "COMPLETED" else meetup.status
+    val nextStatus =
+      if (meetup.status == "CONFIRMED" || meetup.status == "STARTED") "COMPLETED" else meetup.status
     val docRef = db.collection("meetups").document(meetup.id)
     try {
-      docRef
-        .set(
-          mapOf(
-            "safeUids" to updatedSafe,
-            "safeMarkedAtMillis" to System.currentTimeMillis(),
-            "status" to nextStatus,
-            "updatedAt" to FieldValue.serverTimestamp(),
-          ),
-          SetOptions.merge(),
+      val updates =
+        mutableMapOf<String, Any>(
+          "safeUids" to updatedSafe,
+          "safeMarkedAtMillis" to now,
+          "status" to nextStatus,
+          "updatedAt" to FieldValue.serverTimestamp(),
         )
-        .await()
+      if (nextStatus == "COMPLETED") {
+        updates["completedAtMillis"] = now
+      }
+      docRef.set(updates, SetOptions.merge()).await()
     } catch (e: CancellationException) {
       throw e
     } catch (e: Exception) {
@@ -1038,6 +1141,7 @@ class FriendsHubRepository(private val db: FirebaseFirestore) {
 
   suspend fun completeMeetup(meetup: Meetup): Result<Unit> = runCatching {
     val uid = requireUserId()
+    val now = System.currentTimeMillis()
     val updatedSafe = (meetup.safeUids + uid).distinct().take(2)
     val docRef = db.collection("meetups").document(meetup.id)
     try {
@@ -1046,7 +1150,8 @@ class FriendsHubRepository(private val db: FirebaseFirestore) {
           mapOf(
             "status" to "COMPLETED",
             "safeUids" to updatedSafe,
-            "safeMarkedAtMillis" to System.currentTimeMillis(),
+            "safeMarkedAtMillis" to now,
+            "completedAtMillis" to now,
             "updatedAt" to FieldValue.serverTimestamp(),
           ),
           SetOptions.merge(),
@@ -1458,13 +1563,24 @@ class FriendsHubRepository(private val db: FirebaseFirestore) {
         db.collection("reports").get().await()
           .toObjects(SafetyReport::class.java, ServerTimestampBehavior.ESTIMATE)
       val connectionsCount = db.collection("connections").get().await().size()
-      val meetupsCount = db.collection("meetups").get().await().size()
+      val meetups =
+        db.collection("meetups").get().await()
+          .toObjects(Meetup::class.java, ServerTimestampBehavior.ESTIMATE)
+          .sortedByDescending {
+            maxOf(
+              it.startedAtMillis,
+              it.completedAtMillis,
+              it.createdAt?.toDate()?.time ?: 0L,
+              it.scheduledAtMillis,
+            )
+          }
       AdminDashboardSnapshot(
         users = users,
         profiles = profiles,
         reports = reports.sortedByDescending { it.createdAt?.toDate()?.time ?: 0L },
+        meetups = meetups,
         totalConnections = connectionsCount,
-        totalMeetups = meetupsCount,
+        totalMeetups = meetups.size,
       )
     } catch (e: CancellationException) {
       throw e
@@ -1566,6 +1682,7 @@ data class AdminDashboardSnapshot(
   val users: List<UserAccount> = emptyList(),
   val profiles: List<UserProfile> = emptyList(),
   val reports: List<SafetyReport> = emptyList(),
+  val meetups: List<Meetup> = emptyList(),
   val totalConnections: Int = 0,
   val totalMeetups: Int = 0,
 )

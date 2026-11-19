@@ -237,4 +237,23 @@ class LocationPrivacyTest {
       )
     assertEquals(listOf("person_a_8km"), cards10Km.map { it.profile.uid })
   }
+
+  @Test
+  fun distanceMeters_and_formatCountdownDuration_workFor5mMeetupTrigger() {
+    // Same latitude shift of 0.00002 deg is ~2.22 meters (within 5m)
+    val closeMeters = LocationPrivacy.distanceMeters(28.459500, 77.026600, 28.459520, 77.026600)
+    assertTrue("Expected <= 5.0 m, got $closeMeters", closeMeters in 1.0..LocationPrivacy.MEETUP_PROXIMITY_START_METERS)
+
+    // Shift of 0.00020 deg is ~22.2 meters (outside 5m)
+    val farMeters = LocationPrivacy.distanceMeters(28.459500, 77.026600, 28.459700, 77.026600)
+    assertTrue("Expected > 5.0 m, got $farMeters", farMeters > LocationPrivacy.MEETUP_PROXIMITY_START_METERS)
+
+    // Missing coordinates should never falsely trigger <= 5m
+    assertEquals(Double.MAX_VALUE, LocationPrivacy.distanceMeters(0.0, 0.0, 28.4595, 77.0266), 0.1)
+
+    // Countdown formatting (hours + minutes vs minutes + seconds)
+    assertEquals("05:00", LocationPrivacy.formatCountdownDuration(5 * 60_000L))
+    assertEquals("01:02:03", LocationPrivacy.formatCountdownDuration((3600 + 120 + 3) * 1000L))
+    assertEquals("00:00", LocationPrivacy.formatCountdownDuration(-5000L))
+  }
 }

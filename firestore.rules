@@ -58,6 +58,8 @@ service cloud.firestore {
              (!('phoneNote' in data) || (data.phoneNote is string && data.phoneNote.size() <= 20)) &&
              (!('verifiedPhoneNumber' in data) || (data.verifiedPhoneNumber is string && data.verifiedPhoneNumber.size() <= 24)) &&
              (!('phoneVerified' in data) || data.phoneVerified is bool) &&
+             (!('verifiedGmail' in data) || (data.verifiedGmail is string && data.verifiedGmail.size() <= 160)) &&
+             (!('gmailVerified' in data) || data.gmailVerified is bool) &&
              (!('trustedContactName' in data) || (data.trustedContactName is string && data.trustedContactName.size() <= 80)) &&
              (!('trustedContactPhone' in data) || (data.trustedContactPhone is string && data.trustedContactPhone.size() <= 24)) &&
              (!('trustedContactConsent' in data) || data.trustedContactConsent is bool) &&
@@ -85,6 +87,7 @@ service cloud.firestore {
              (data.interests.size() == 0 || data.interests[0] is string) &&
              data.isVerified is bool &&
              (!('phoneVerified' in data) || data.phoneVerified is bool) &&
+             (!('gmailVerified' in data) || data.gmailVerified is bool) &&
              (!('selfieVerified' in data) || data.selfieVerified is bool) &&
              (!('selfieStatus' in data) || data.selfieStatus in ['NONE', 'PENDING', 'APPROVED', 'REJECTED']) &&
              (!('selfiePhotoData' in data) || (data.selfiePhotoData is string && data.selfiePhotoData.size() <= 350000)) &&
@@ -274,7 +277,7 @@ service cloud.firestore {
                        incoming().role == 'USER' &&
                        incoming().accountStatus == 'ACTIVE' &&
                        incoming().keys().hasAll(['uid', 'displayName', 'dateOfBirthMillis', 'isAdultVerified', 'accountStatus', 'role', 'pushNotificationsEnabled', 'callAlertsEnabled', 'meetupRemindersEnabled', 'onboardingCompleted', 'createdAt', 'updatedAt']) &&
-                       incoming().keys().hasOnly(['uid', 'displayName', 'email', 'phoneNote', 'verifiedPhoneNumber', 'phoneVerified', 'trustedContactName', 'trustedContactPhone', 'trustedContactConsent', 'dateOfBirthMillis', 'isAdultVerified', 'accountStatus', 'role', 'pushNotificationsEnabled', 'callAlertsEnabled', 'meetupRemindersEnabled', 'onboardingCompleted', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['uid', 'displayName', 'email', 'phoneNote', 'verifiedPhoneNumber', 'phoneVerified', 'verifiedGmail', 'gmailVerified', 'trustedContactName', 'trustedContactPhone', 'trustedContactConsent', 'dateOfBirthMillis', 'isAdultVerified', 'accountStatus', 'role', 'pushNotificationsEnabled', 'callAlertsEnabled', 'meetupRemindersEnabled', 'onboardingCompleted', 'createdAt', 'updatedAt']) &&
                        isValidUserAccount(incoming());
 
       allow update: if isSignedIn() &&
@@ -289,7 +292,7 @@ service cloud.firestore {
                           incoming().role == existing().role &&
                           incoming().accountStatus == existing().accountStatus &&
                           incoming().createdAt == existing().createdAt &&
-                          incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'email', 'phoneNote', 'verifiedPhoneNumber', 'phoneVerified', 'trustedContactName', 'trustedContactPhone', 'trustedContactConsent', 'dateOfBirthMillis', 'isAdultVerified', 'pushNotificationsEnabled', 'callAlertsEnabled', 'meetupRemindersEnabled', 'onboardingCompleted', 'updatedAt']))
+                          incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'email', 'phoneNote', 'verifiedPhoneNumber', 'phoneVerified', 'verifiedGmail', 'gmailVerified', 'trustedContactName', 'trustedContactPhone', 'trustedContactConsent', 'dateOfBirthMillis', 'isAdultVerified', 'pushNotificationsEnabled', 'callAlertsEnabled', 'meetupRemindersEnabled', 'onboardingCompleted', 'updatedAt']))
                        );
 
       allow delete: if isSignedIn() && isValidId(userId) && (request.auth.uid == userId || isAdmin());
@@ -315,10 +318,11 @@ service cloud.firestore {
                        incoming().uid == request.auth.uid &&
                        incoming().isVerified == false &&
                        (!('phoneVerified' in incoming()) || incoming().phoneVerified == false) &&
+                       (!('gmailVerified' in incoming()) || incoming().gmailVerified == false) &&
                        (!('selfieVerified' in incoming()) || incoming().selfieVerified == false) &&
                        incoming().accountStatus == 'ACTIVE' &&
                        incoming().keys().hasAll(['uid', 'firstName', 'age', 'bio', 'cityArea', 'interests', 'isVerified', 'isAvailable', 'preferredActivity', 'availabilityDurationMinutes', 'availabilityExpiresAtMillis', 'approxLat', 'approxLng', 'locationUpdatedAtMillis', 'discoveryOptIn', 'accountStatus', 'createdAt', 'updatedAt']) &&
-                       incoming().keys().hasOnly(['uid', 'firstName', 'age', 'gender', 'bio', 'cityArea', 'photoData', 'interests', 'isVerified', 'phoneVerified', 'selfieVerified', 'selfieStatus', 'selfiePhotoData', 'isAvailable', 'preferredActivity', 'availabilityDurationMinutes', 'availabilityExpiresAtMillis', 'approxLat', 'approxLng', 'locationUpdatedAtMillis', 'discoveryOptIn', 'accountStatus', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['uid', 'firstName', 'age', 'gender', 'bio', 'cityArea', 'photoData', 'interests', 'isVerified', 'phoneVerified', 'gmailVerified', 'selfieVerified', 'selfieStatus', 'selfiePhotoData', 'isAvailable', 'preferredActivity', 'availabilityDurationMinutes', 'availabilityExpiresAtMillis', 'approxLat', 'approxLng', 'locationUpdatedAtMillis', 'discoveryOptIn', 'accountStatus', 'createdAt', 'updatedAt']) &&
                        isValidUserProfile(incoming());
 
       allow update: if isSignedIn() &&
@@ -335,7 +339,7 @@ service cloud.firestore {
                           (!incoming().diff(existing()).affectedKeys().hasAny(['selfieStatus']) || incoming().selfieStatus in ['NONE', 'PENDING']) &&
                           incoming().accountStatus == existing().accountStatus &&
                           incoming().createdAt == existing().createdAt &&
-                          incoming().diff(existing()).affectedKeys().hasOnly(['firstName', 'age', 'gender', 'bio', 'cityArea', 'photoData', 'interests', 'phoneVerified', 'selfieStatus', 'selfiePhotoData', 'isAvailable', 'preferredActivity', 'availabilityDurationMinutes', 'availabilityExpiresAtMillis', 'approxLat', 'approxLng', 'locationUpdatedAtMillis', 'discoveryOptIn', 'updatedAt']))
+                          incoming().diff(existing()).affectedKeys().hasOnly(['firstName', 'age', 'gender', 'bio', 'cityArea', 'photoData', 'interests', 'phoneVerified', 'gmailVerified', 'selfieStatus', 'selfiePhotoData', 'isAvailable', 'preferredActivity', 'availabilityDurationMinutes', 'availabilityExpiresAtMillis', 'approxLat', 'approxLng', 'locationUpdatedAtMillis', 'discoveryOptIn', 'updatedAt']))
                        );
 
       allow delete: if isSignedIn() && isValidId(profileId) && (request.auth.uid == profileId || isAdmin());

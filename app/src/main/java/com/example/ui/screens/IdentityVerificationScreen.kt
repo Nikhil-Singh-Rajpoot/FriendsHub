@@ -1,10 +1,8 @@
 package com.example.ui.screens
 
 import android.Manifest
-import android.app.Activity
-import android.content.Context
-import android.content.ContextWrapper
 import android.content.pm.PackageManager
+import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.CameraSelector
@@ -37,9 +35,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.CameraAlt
 import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.Email
 import androidx.compose.material.icons.rounded.FaceRetouchingNatural
-import androidx.compose.material.icons.rounded.Lock
-import androidx.compose.material.icons.rounded.PhoneAndroid
+import androidx.compose.material.icons.rounded.MarkEmailRead
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Verified
 import androidx.compose.material3.Button
@@ -88,14 +86,11 @@ import com.example.ui.theme.EmeraldContainer
 import com.example.ui.theme.EmeraldOnline
 import com.example.util.ImageUtils
 import com.google.firebase.Firebase
-import com.google.firebase.FirebaseException
-import com.google.firebase.auth.PhoneAuthCredential
-import com.google.firebase.auth.PhoneAuthOptions
-import com.google.firebase.auth.PhoneAuthProvider
+import com.google.firebase.auth.FirebaseAuthRecentLoginRequiredException
 import com.google.firebase.auth.auth
 import java.io.File
-import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.tasks.await
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -103,22 +98,27 @@ fun IdentityVerificationScreen(
   account: UserAccount?,
   profile: UserProfile,
   onBack: () -> Unit,
-  onPhoneVerified: (String) -> Unit,
+  onGmailVerified: (String) -> Unit,
   onSubmitLiveSelfie: (String) -> Unit,
 ) {
   val context = LocalContext.current
   val scope = rememberCoroutineScope()
 
-  // Level 1: Phone OTP State
-  var phoneInput by remember(account?.verifiedPhoneNumber) {
-    mutableStateOf(account?.verifiedPhoneNumber?.ifBlank { "+91" } ?: "+91")
+  // Level 1: Gmail Verification State (Firebase Auth Free Spark Plan)
+  val signedInEmail = remember { runCatching { Firebase.auth.currentUser?.email.orEmpty() }.getOrDefault("") }
+  val isFirebaseEmailVerified = remember { runCatching { Firebase.auth.currentUser?.isEmailVerified == true }.getOrDefault(false) }
+  var gmailInput by remember(account?.verifiedGmail, account?.email, signedInEmail) {
+    val initial =
+      account?.verifiedGmail?.ifBlank { account.email }?.ifBlank { signedInEmail }
+        ?: signedInEmail
+    mutableStateOf(initial)
   }
-  var otpCode by remember { mutableStateOf("") }
-  var verificationId by remember { mutableStateOf<String?>(null) }
-  var isSendingOtp by remember { mutableStateOf(false) }
-  var isVerifyingOtp by remember { mutableStateOf(false) }
-  var phoneError by remember { mutableStateOf<String?>(null) }
-  var phoneSuccessMessage by remember { mutableStateOf<String?>(null) }
+  var gmailCodeOrLink by remember { mutableStateOf("") }
+  var verificationEmailSent by remember { mutableStateOf(false) }
+  var isSendingEmail by remember { mutableStateOf(false) }
+  var isVerifyingGmail by remember { mutableStateOf(false) }
+  var gmailError by remember { mutableStateOf<String?>(null) }
+  var gmailSuccessMessage by remember { mutableStateOf<String?>(null) }
 
   // Level 2: Real-Time Selfie State
   var hasCameraPermission by remember {
@@ -142,45 +142,6 @@ fun IdentityVerificationScreen(
         selfieError = "Camera permission is required to capture a real-time selfie."
       }
     }
-
-  fun linkPhoneCredential(credential: PhoneAuthCredential, normalizedPhone: String) {
-    val currentUser = Firebase.auth.currentUser
-    if (currentUser == null) {
-      isVerifyingOtp = false
-      phoneError = "Please sign in first."
-      return
-    }
-    val existingPhone = currentUser.phoneNumber
-    if (!existingPhone.isNullOrBlank() && existingPhone == normalizedPhone) {
-      isVerifyingOtp = false
-      phoneSuccessMessage = "Phone number verified via Firebase Auth."
-      onPhoneVerified(normalizedPhone)
-      return
-    }
-    currentUser
-      .linkWithCredential(credential)
-      .addOnSuccessListener {
-        isVerifyingOtp = false
-        phoneError = null
-        phoneSuccessMessage = "Phone OTP verified!"
-        onPhoneVerified(normalizedPhone)
-      }
-      .addOnFailureListener { exc ->
-        // If phone provider was already linked or credential needs updatePhoneNumber
-        currentUser
-          .updatePhoneNumber(credential)
-          .addOnSuccessListener {
-            isVerifyingOtp = false
-            phoneError = null
-            phoneSuccessMessage = "Phone OTP verified!"
-            onPhoneVerified(normalizedPhone)
-          }
-          .addOnFailureListener { updateErr ->
-            isVerifyingOtp = false
-            phoneError = updateErr.localizedMessage ?: exc.localizedMessage ?: "OTP verification failed."
-          }
-      }
-  }
 
   Scaffold(
     topBar = {
@@ -226,7 +187,7 @@ fun IdentityVerificationScreen(
           }
           Text(
             text =
-              "Only verified members can send or receive connection requests. Complete Level 1 (Phone OTP) and Level 2 (Real-Time Selfie) to earn your Blue Tick.",
+              "Only verified members can send or receive connection requests. Complete Level 1 (Gmail Verification) and Level 2 (Real-Time Selfie) to earn your Blue Tick.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
           )
@@ -234,12 +195,13 @@ fun IdentityVerificationScreen(
       }
 
       // -----------------------------------------------------------------------
-      // LEVEL 1: Phone Number Verification with OTP
+      // LEVEL 1: Gmail Verification (Free on Firebase Spark Plan)
       // -----------------------------------------------------------------------
+      val isLevel1Done = profile.isLevel1Verified() || account?.isLevel1Verified() == true
       Card(
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         shape = MaterialTheme.shapes.large,
-        modifier = Modifier.fillMaxWidth().testTag("level1_phone_card"),
+        modifier = Modifier.fillMaxWidth().testTag("level1_gmail_card"),
       ) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
           Row(
@@ -249,13 +211,13 @@ fun IdentityVerificationScreen(
           ) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
               Icon(
-                imageVector = Icons.Rounded.PhoneAndroid,
+                imageVector = Icons.Rounded.Email,
                 contentDescription = null,
                 tint = MaterialTheme.colorScheme.primary,
               )
-              Text("Level 1: Phone Number OTP", style = MaterialTheme.typography.titleMedium)
+              Text("Level 1: Gmail Verification", style = MaterialTheme.typography.titleMedium)
             }
-            if (profile.phoneVerified || account?.phoneVerified == true) {
+            if (isLevel1Done) {
               StatusPill(
                 text = "Verified",
                 containerColor = EmeraldContainer,
@@ -270,134 +232,205 @@ fun IdentityVerificationScreen(
             }
           }
 
-          if (profile.phoneVerified || account?.phoneVerified == true) {
+          if (isLevel1Done) {
+            val shownEmail =
+              account?.verifiedGmail?.ifBlank { account.email }
+                ?: signedInEmail
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
               Icon(Icons.Rounded.CheckCircle, contentDescription = null, tint = EmeraldOnline)
               Text(
                 text =
-                  "Phone verified${account?.verifiedPhoneNumber?.takeIf { it.isNotBlank() }?.let { " ($it)" } ?: ""}. Your number is kept strictly private.",
+                  "Gmail verified${shownEmail.takeIf { it.isNotBlank() }?.let { " ($it)" } ?: ""}. Your email is kept strictly private.",
                 style = MaterialTheme.typography.bodyMedium,
               )
             }
           } else {
             Text(
-              text = "Verify your mobile number via SMS OTP. Your phone number is never shown to other users.",
+              text =
+                "Verify your Gmail address using Firebase Email Verification (free, no SMS charges). We'll send a verification email to your Gmail inbox.",
               style = MaterialTheme.typography.bodyMedium,
               color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
 
             OutlinedTextField(
-              value = phoneInput,
-              onValueChange = { phoneInput = it; phoneError = null },
-              label = { Text("Mobile Number (with country code)") },
-              placeholder = { Text("+919876543210") },
-              keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
+              value = gmailInput,
+              onValueChange = { gmailInput = it; gmailError = null },
+              label = { Text("Gmail Address") },
+              placeholder = { Text("yourname@gmail.com") },
+              keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
               singleLine = true,
-              modifier = Modifier.fillMaxWidth().testTag("level1_phone_input"),
+              modifier = Modifier.fillMaxWidth().testTag("level1_gmail_input"),
             )
 
             Button(
-              enabled = !isSendingOtp && phoneInput.trim().length >= 10,
+              enabled = !isSendingEmail && gmailInput.trim().contains("@"),
               onClick = {
-                val normalized = normalizePhoneE164(phoneInput)
+                val normalized = normalizeGmailAddress(gmailInput)
                 if (normalized == null) {
-                  phoneError = "Enter a valid phone number starting with + and country code (e.g., +919876543210)."
+                  gmailError = "Enter a valid Gmail address (e.g., yourname@gmail.com)."
                   return@Button
                 }
-                val activity = context.findActivity()
-                if (activity == null) {
-                  phoneError = "Unable to launch phone verification from this context."
+                val currentUser = Firebase.auth.currentUser
+                if (currentUser == null) {
+                  gmailError = "Please sign in with Google first."
                   return@Button
                 }
-                isSendingOtp = true
-                phoneError = null
-                phoneSuccessMessage = null
+                isSendingEmail = true
+                gmailError = null
+                gmailSuccessMessage = null
 
-                val callbacks =
-                  object : PhoneAuthProvider.OnVerificationStateChangedCallbacks() {
-                    override fun onVerificationCompleted(credential: PhoneAuthCredential) {
-                      isSendingOtp = false
-                      isVerifyingOtp = true
-                      linkPhoneCredential(credential, normalized)
+                scope.launch {
+                  runCatching {
+                    if (normalized.equals(currentUser.email, ignoreCase = true)) {
+                      currentUser.sendEmailVerification().await()
+                    } else {
+                      currentUser.verifyBeforeUpdateEmail(normalized).await()
                     }
-
-                    override fun onVerificationFailed(e: FirebaseException) {
-                      isSendingOtp = false
-                      val rawMsg = e.localizedMessage.orEmpty()
-                      phoneError =
-                        when {
-                          rawMsg.contains("region", ignoreCase = true) ||
-                            rawMsg.contains("BILLING_NOT_ENABLED", ignoreCase = true) ->
-                            "Firebase blocked SMS for this country or plan. Enable your country under Firebase Console → Authentication → Settings → SMS region policy (real SMS requires the Blaze plan; Firebase Test Phone Numbers work free)."
-                          rawMsg.contains("operation is not allowed", ignoreCase = true) ||
-                            rawMsg.contains("OPERATION_NOT_ALLOWED", ignoreCase = true) ->
-                            "Phone Sign-In is disabled in Firebase Console. Enable Phone under Authentication → Sign-in method."
-                          else ->
-                            rawMsg.ifBlank { "Could not send SMS OTP. Check number & Firebase Phone Auth setup." }
-                        }
-                    }
-
-                    override fun onCodeSent(
-                      verifId: String,
-                      token: PhoneAuthProvider.ForceResendingToken,
-                    ) {
-                      isSendingOtp = false
-                      verificationId = verifId
-                      phoneSuccessMessage = "6-digit OTP sent to $normalized."
-                    }
+                  }.onSuccess {
+                    isSendingEmail = false
+                    verificationEmailSent = true
+                    gmailSuccessMessage =
+                      "Verification email sent to $normalized! Check Inbox/Spam, tap the link OR paste the code/link below."
+                  }.onFailure { err ->
+                    isSendingEmail = false
+                    gmailError =
+                      when {
+                        err is FirebaseAuthRecentLoginRequiredException ->
+                          "To change to a different Gmail, please sign out and sign in again first, or verify your current Gmail (${currentUser.email ?: "signed-in account"})."
+                        err.localizedMessage?.contains("too-many-requests", ignoreCase = true) == true ||
+                          err.localizedMessage?.contains("unusual activity", ignoreCase = true) == true ->
+                          "Verification email already sent recently. Check your Gmail inbox/spam or tap Confirm below."
+                        else ->
+                          err.localizedMessage ?: "Could not send verification email. Check internet & Gmail address."
+                      }
                   }
-
-                val options =
-                  PhoneAuthOptions.newBuilder(Firebase.auth)
-                    .setPhoneNumber(normalized)
-                    .setTimeout(60L, TimeUnit.SECONDS)
-                    .setActivity(activity)
-                    .setCallbacks(callbacks)
-                    .build()
-                PhoneAuthProvider.verifyPhoneNumber(options)
+                }
               },
-              modifier = Modifier.fillMaxWidth().height(48.dp).testTag("send_otp_button"),
+              modifier = Modifier.fillMaxWidth().height(48.dp).testTag("send_gmail_otp_button"),
             ) {
-              if (isSendingOtp) {
+              if (isSendingEmail) {
                 CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp, color = Color.White)
                 Spacer(modifier = Modifier.width(8.dp))
               }
-              Text(if (verificationId == null) "Send OTP" else "Resend OTP")
+              Text(if (!verificationEmailSent) "Send Verification Email" else "Resend Verification Email")
             }
 
-            if (verificationId != null) {
+            if (verificationEmailSent ||
+              (signedInEmail.isNotBlank() &&
+                gmailInput.trim().equals(signedInEmail, ignoreCase = true) &&
+                isFirebaseEmailVerified)
+            ) {
               OutlinedTextField(
-                value = otpCode,
-                onValueChange = { if (it.length <= 6 && it.all(Char::isDigit)) otpCode = it },
-                label = { Text("Enter 6-Digit OTP") },
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                value = gmailCodeOrLink,
+                onValueChange = { gmailCodeOrLink = it; gmailError = null },
+                label = { Text("Paste Verification Link or Code (Optional)") },
+                placeholder = { Text("Paste link or code from Gmail email") },
                 singleLine = true,
-                modifier = Modifier.fillMaxWidth().testTag("level1_otp_input"),
+                modifier = Modifier.fillMaxWidth().testTag("level1_gmail_code_input"),
               )
-              Button(
-                enabled = !isVerifyingOtp && otpCode.length == 6,
-                onClick = {
-                  val verifId = verificationId ?: return@Button
-                  val normalized = normalizePhoneE164(phoneInput) ?: phoneInput.trim()
-                  isVerifyingOtp = true
-                  phoneError = null
-                  val credential = PhoneAuthProvider.getCredential(verifId, otpCode)
-                  linkPhoneCredential(credential, normalized)
-                },
-                modifier = Modifier.fillMaxWidth().height(48.dp).testTag("verify_otp_button"),
-              ) {
-                if (isVerifyingOtp) {
-                  CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp, color = Color.White)
-                  Spacer(modifier = Modifier.width(8.dp))
+
+              if (gmailCodeOrLink.trim().isNotEmpty()) {
+                Button(
+                  enabled = !isVerifyingGmail,
+                  onClick = {
+                    val normalized = normalizeGmailAddress(gmailInput)
+                    if (normalized == null) {
+                      gmailError = "Enter a valid Gmail address (e.g., yourname@gmail.com)."
+                      return@Button
+                    }
+                    val currentUser = Firebase.auth.currentUser
+                    if (currentUser == null) {
+                      gmailError = "Please sign in first."
+                      return@Button
+                    }
+                    val oobCode = extractVerificationCode(gmailCodeOrLink)
+                    if (oobCode.isBlank()) {
+                      gmailError = "Paste the valid verification code or full link from your Gmail message."
+                      return@Button
+                    }
+                    isVerifyingGmail = true
+                    gmailError = null
+                    scope.launch {
+                      runCatching {
+                        Firebase.auth.applyActionCode(oobCode).await()
+                        currentUser.reload().await()
+                      }.onSuccess {
+                        isVerifyingGmail = false
+                        val reloadedUser = Firebase.auth.currentUser
+                        if (reloadedUser?.isEmailVerified == true &&
+                          reloadedUser.email.equals(normalized, ignoreCase = true)
+                        ) {
+                          gmailSuccessMessage = "Gmail verified!"
+                          onGmailVerified(normalized)
+                        } else {
+                          gmailSuccessMessage = "Verification code applied! Checking Gmail status..."
+                          onGmailVerified(normalized)
+                        }
+                      }.onFailure { err ->
+                        isVerifyingGmail = false
+                        gmailError =
+                          err.localizedMessage ?: "Invalid or expired verification code. Request a fresh email or tap Confirm after clicking the link."
+                      }
+                    }
+                  },
+                  modifier = Modifier.fillMaxWidth().height(48.dp).testTag("verify_gmail_code_button"),
+                ) {
+                  if (isVerifyingGmail) {
+                    CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp, color = Color.White)
+                    Spacer(modifier = Modifier.width(8.dp))
+                  }
+                  Text("Verify Gmail Code")
                 }
-                Text("Verify OTP")
+              }
+
+              OutlinedButton(
+                enabled = !isVerifyingGmail,
+                onClick = {
+                  val normalized = normalizeGmailAddress(gmailInput)
+                  if (normalized == null) {
+                    gmailError = "Enter a valid Gmail address (e.g., yourname@gmail.com)."
+                    return@OutlinedButton
+                  }
+                  val currentUser = Firebase.auth.currentUser
+                  if (currentUser == null) {
+                    gmailError = "Please sign in first."
+                    return@OutlinedButton
+                  }
+                  isVerifyingGmail = true
+                  gmailError = null
+                  scope.launch {
+                    runCatching {
+                      currentUser.reload().await()
+                    }.onSuccess {
+                      isVerifyingGmail = false
+                      val reloaded = Firebase.auth.currentUser
+                      if (reloaded?.isEmailVerified == true &&
+                        reloaded.email.equals(normalized, ignoreCase = true)
+                      ) {
+                        gmailSuccessMessage = "Gmail verified via Google / Firebase Auth!"
+                        onGmailVerified(normalized)
+                      } else {
+                        gmailError =
+                          "Not confirmed for $normalized yet. Open the verification email in Gmail, click the verification link, then tap Confirm again."
+                      }
+                    }.onFailure { err ->
+                      isVerifyingGmail = false
+                      gmailError = err.localizedMessage ?: "Could not refresh verification status. Try again."
+                    }
+                  }
+                },
+                modifier = Modifier.fillMaxWidth().height(48.dp).testTag("confirm_gmail_verified_button"),
+              ) {
+                Icon(Icons.Rounded.MarkEmailRead, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("Confirm Gmail Verification")
               }
             }
 
-            phoneSuccessMessage?.let { msg ->
+            gmailSuccessMessage?.let { msg ->
               Text(msg, color = EmeraldOnline, style = MaterialTheme.typography.bodyMedium)
             }
-            phoneError?.let { err ->
+            gmailError?.let { err ->
               Text(err, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
             }
           }
@@ -545,7 +578,7 @@ fun IdentityVerificationScreen(
 
       SafetyNoticeCard(
         title = "Your Privacy & Safety",
-        message = "Selfie photos and verified mobile numbers are reviewed solely for identity verification and never displayed on public discovery cards.",
+        message = "Selfie photos and verified Gmail addresses are reviewed solely for identity verification and never displayed on public discovery cards.",
       )
     }
   }
@@ -674,21 +707,17 @@ private fun RealTimeSelfieCameraBox(
   }
 }
 
-private fun normalizePhoneE164(raw: String): String? {
-  val digitsOnly = raw.trim().filter { it.isDigit() || it == '+' }
-  val normalized =
-    when {
-      digitsOnly.startsWith("+") -> digitsOnly
-      digitsOnly.length == 10 -> "+91$digitsOnly"
-      else -> "+$digitsOnly"
-    }
-  val countDigits = normalized.drop(1).count { it.isDigit() }
-  return if (normalized.startsWith("+") && countDigits in 10..15) normalized else null
+private fun normalizeGmailAddress(raw: String): String? {
+  val trimmed = raw.trim().lowercase()
+  val gmailRegex = Regex("^[a-z0-9._%+-]+@(gmail|googlemail)\\.com$")
+  return if (gmailRegex.matches(trimmed)) trimmed else null
 }
 
-private tailrec fun Context.findActivity(): Activity? =
-  when (this) {
-    is Activity -> this
-    is ContextWrapper -> baseContext.findActivity()
-    else -> null
-  }
+private fun extractVerificationCode(raw: String): String {
+  val trimmed = raw.trim()
+  if (trimmed.isBlank()) return ""
+  return runCatching {
+    val uri = Uri.parse(trimmed)
+    uri.getQueryParameter("oobCode")?.takeIf { it.isNotBlank() }
+  }.getOrNull() ?: trimmed
+}

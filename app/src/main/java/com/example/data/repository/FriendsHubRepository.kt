@@ -126,6 +126,8 @@ class FriendsHubRepository(private val db: FirebaseFirestore) {
         "phoneNote" to phoneNote.trim().take(20),
         "verifiedPhoneNumber" to "",
         "phoneVerified" to false,
+        "verifiedGmail" to "",
+        "gmailVerified" to false,
         "trustedContactName" to "",
         "trustedContactPhone" to "",
         "trustedContactConsent" to false,
@@ -153,6 +155,7 @@ class FriendsHubRepository(private val db: FirebaseFirestore) {
         "interests" to interests.take(10),
         "isVerified" to false,
         "phoneVerified" to false,
+        "gmailVerified" to false,
         "selfieVerified" to false,
         "selfieStatus" to "NONE",
         "selfiePhotoData" to "",
@@ -268,11 +271,12 @@ class FriendsHubRepository(private val db: FirebaseFirestore) {
   }
 
   // ---------------------------------------------------------------------------
-  // Identity Verification (Level 1 Phone OTP & Level 2 Real-Time Selfie)
+  // Identity Verification (Level 1 Gmail Verification & Level 2 Real-Time Selfie)
   // ---------------------------------------------------------------------------
-  suspend fun recordLevel1PhoneVerified(verifiedPhoneNumber: String): Result<Unit> = runCatching {
+  suspend fun recordLevel1GmailVerified(verifiedGmail: String): Result<Unit> = runCatching {
     val uid = requireUserId()
-    val cleanPhone = verifiedPhoneNumber.trim().take(24)
+    val cleanGmail = verifiedGmail.trim().take(160)
+    require(cleanGmail.contains("@")) { "Enter a valid Gmail address." }
     val userRef = db.collection("users").document(uid)
     val profileRef = db.collection("user_profiles").document(uid)
     try {
@@ -280,8 +284,9 @@ class FriendsHubRepository(private val db: FirebaseFirestore) {
       batch.set(
         userRef,
         mapOf(
-          "verifiedPhoneNumber" to cleanPhone,
-          "phoneVerified" to true,
+          "verifiedGmail" to cleanGmail,
+          "gmailVerified" to true,
+          "email" to cleanGmail,
           "updatedAt" to FieldValue.serverTimestamp(),
         ),
         SetOptions.merge(),
@@ -289,7 +294,7 @@ class FriendsHubRepository(private val db: FirebaseFirestore) {
       batch.set(
         profileRef,
         mapOf(
-          "phoneVerified" to true,
+          "gmailVerified" to true,
           "updatedAt" to FieldValue.serverTimestamp(),
         ),
         SetOptions.merge(),
@@ -539,7 +544,7 @@ class FriendsHubRepository(private val db: FirebaseFirestore) {
     val latestTo = getProfileById(toProfile.uid).getOrNull() ?: toProfile
     if (!latestFrom.isVerified) {
       throw IllegalStateException(
-        "Only verified users can connect. Complete Level 1 (Phone OTP) & Level 2 (Live Selfie) verification first."
+        "Only verified users can connect. Complete Level 1 (Gmail Verification) & Level 2 (Live Selfie) verification first."
       )
     }
     if (!latestTo.isVerified) {

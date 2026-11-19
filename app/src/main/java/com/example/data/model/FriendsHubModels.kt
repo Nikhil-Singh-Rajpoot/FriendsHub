@@ -50,6 +50,8 @@ data class UserAccount(
   val phoneNote: String = "",
   val verifiedPhoneNumber: String = "",
   val phoneVerified: Boolean = false,
+  val verifiedGmail: String = "",
+  val gmailVerified: Boolean = false,
   val trustedContactName: String = "",
   val trustedContactPhone: String = "",
   val trustedContactConsent: Boolean = false,
@@ -67,6 +69,7 @@ data class UserAccount(
   @ServerTimestamp val updatedAt: Timestamp? = null,
 ) {
   fun hasTrustedContact(): Boolean = trustedContactPhone.isNotBlank()
+  fun isLevel1Verified(): Boolean = gmailVerified || phoneVerified
 }
 
 @IgnoreExtraProperties
@@ -84,6 +87,7 @@ data class UserProfile(
   @set:PropertyName("isVerified")
   var isVerified: Boolean = false,
   val phoneVerified: Boolean = false,
+  val gmailVerified: Boolean = false,
   val selfieVerified: Boolean = false,
   val selfieStatus: String = "NONE",
   val selfiePhotoData: String = "",
@@ -108,10 +112,12 @@ data class UserProfile(
       availabilityExpiresAtMillis > nowMillis
   }
 
+  fun isLevel1Verified(): Boolean = gmailVerified || phoneVerified
+
   fun verificationLevel(): Int {
     return when {
       isVerified || selfieVerified -> 2
-      phoneVerified -> 1
+      isLevel1Verified() -> 1
       else -> 0
     }
   }
@@ -120,9 +126,10 @@ data class UserProfile(
     return when {
       isVerified -> "Verified (Blue Tick)"
       selfieVerified -> "Level 2 Selfie Verified"
-      phoneVerified && selfieStatus == "PENDING" -> "Level 1 Verified • Selfie Pending"
-      phoneVerified -> "Level 1 Phone Verified"
-      selfieStatus == "PENDING" -> "Selfie Pending • Needs Phone OTP"
+      isLevel1Verified() && selfieStatus == "PENDING" -> "Level 1 Verified • Selfie Pending"
+      gmailVerified -> "Level 1 Gmail Verified"
+      phoneVerified -> "Level 1 Verified"
+      selfieStatus == "PENDING" -> "Selfie Pending • Needs Gmail Verification"
       else -> "Unverified (Level 0)"
     }
   }

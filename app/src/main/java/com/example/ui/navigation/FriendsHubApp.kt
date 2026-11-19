@@ -481,7 +481,7 @@ private fun AuthenticatedAppShell(
       !myProfile.isVerified -> {
         verifyGateCanSelfVerify = true
         verifyGateMessage =
-          "Only verified users can connect. Complete Level 1 (Phone OTP) and Level 2 (Real-Time Selfie) verification to earn your Blue Tick."
+          "Only verified users can connect. Complete Level 1 (Gmail Verification) and Level 2 (Real-Time Selfie) verification to earn your Blue Tick."
       }
       !target.isVerified -> {
         verifyGateCanSelfVerify = false
@@ -617,7 +617,7 @@ private fun AuthenticatedAppShell(
           account = account,
           profile = myProfile,
           onBack = { activeSubScreen = null },
-          onPhoneVerified = { phone -> viewModel.recordLevel1PhoneVerified(phone) },
+          onGmailVerified = { gmail -> viewModel.recordLevel1GmailVerified(gmail) },
           onSubmitLiveSelfie = { photoData -> viewModel.submitLevel2LiveSelfie(photoData) },
         )
       }

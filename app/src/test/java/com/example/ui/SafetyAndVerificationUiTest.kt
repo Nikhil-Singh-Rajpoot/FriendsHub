@@ -89,22 +89,29 @@ class SafetyAndVerificationUiTest {
   }
 
   @Test
-  fun identityVerificationScreen_displaysLevel1PhoneOtpAndLevel2RealTimeSelfie() {
+  fun identityVerificationScreen_displaysLevel1GmailVerificationAndLevel2RealTimeSelfie() {
     composeTestRule.setContent {
       FriendsHubTheme {
         IdentityVerificationScreen(
-          account = UserAccount(uid = "u_me", displayName = "Aarav", phoneVerified = false),
-          profile = UserProfile(uid = "u_me", firstName = "Aarav", age = 26, phoneVerified = false, isVerified = false),
+          account = UserAccount(uid = "u_me", displayName = "Aarav", email = "aarav@gmail.com", gmailVerified = false),
+          profile = UserProfile(uid = "u_me", firstName = "Aarav", age = 26, gmailVerified = false, isVerified = false),
           onBack = {},
-          onPhoneVerified = {},
+          onGmailVerified = {},
           onSubmitLiveSelfie = {},
         )
       }
     }
 
-    composeTestRule.onNodeWithTag("level1_phone_card").performScrollTo().assertIsDisplayed()
-    composeTestRule.onNodeWithText("Level 1: Phone Number OTP").assertIsDisplayed()
-    composeTestRule.onNodeWithTag("send_otp_button").performScrollTo().assertIsDisplayed()
+    composeTestRule.onNodeWithTag("level1_gmail_card").performScrollTo().assertIsDisplayed()
+    composeTestRule.onNodeWithText("Level 1: Gmail Verification").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("level1_gmail_input").performScrollTo().assertIsDisplayed()
+    composeTestRule.onNodeWithTag("send_gmail_otp_button").performScrollTo().assertIsDisplayed()
+
+    // Entering non-Gmail shows validation error
+    composeTestRule.onNodeWithTag("level1_gmail_input").performScrollTo().performTextReplacement("aarav@yahoo.com")
+    composeTestRule.onNodeWithTag("send_gmail_otp_button").performScrollTo().performClick()
+    composeTestRule.onNodeWithText("Enter a valid Gmail address", substring = true).performScrollTo().assertIsDisplayed()
+
     composeTestRule.onNodeWithTag("level2_selfie_card").performScrollTo().assertIsDisplayed()
     composeTestRule.onNodeWithText("Level 2: Real-Time Live Selfie").assertIsDisplayed()
     composeTestRule.onNodeWithTag("open_live_selfie_camera_button").performScrollTo().assertIsDisplayed()

@@ -438,13 +438,13 @@ class FriendsHubViewModel(
     }
   }
 
-  fun recordLevel1PhoneVerified(verifiedPhoneNumber: String) {
+  fun recordLevel1GmailVerified(verifiedGmail: String) {
     viewModelScope.launch {
-      repository.recordLevel1PhoneVerified(verifiedPhoneNumber)
+      repository.recordLevel1GmailVerified(verifiedGmail)
         .onSuccess {
-          _statusMessage.value = "Level 1 verified! Phone number verified with OTP."
+          _statusMessage.value = "Level 1 verified! Gmail verified: $verifiedGmail"
         }
-        .onFailure { _statusMessage.value = it.localizedMessage ?: "Could not save phone verification" }
+        .onFailure { _statusMessage.value = it.localizedMessage ?: "Could not save Gmail verification" }
     }
   }
 

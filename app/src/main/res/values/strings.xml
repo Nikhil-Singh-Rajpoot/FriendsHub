@@ -11,5 +11,5 @@
     <string name="location_privacy_notice">Only your approximate distance and area name are shown to nearby verified members. Exact GPS coordinates and personal contact info are never shared.</string>
     <string name="emergency_help_title">Emergency Help</string>
     <string name="identity_verification_title">Identity Verification</string>
-    <string name="verified_only_connect_notice">Only verified members (Level 1 Phone OTP + Level 2 Live Selfie approved) can send or receive connection requests.</string>
+    <string name="verified_only_connect_notice">Only verified members (Level 1 Gmail Verification + Level 2 Live Selfie approved) can send or receive connection requests.</string>
 </resources>

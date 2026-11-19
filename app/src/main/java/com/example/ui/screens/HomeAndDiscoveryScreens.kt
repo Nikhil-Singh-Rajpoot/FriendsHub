@@ -1093,7 +1093,7 @@ fun UserProfileDetailsScreen(
           title = "Verification Required to Connect",
           message =
             when {
-              !myIsVerified -> "Verify your identity (Level 1 Phone OTP & Level 2 Live Selfie) before sending connection requests."
+              !myIsVerified -> "Verify your identity (Level 1 Gmail Verification & Level 2 Live Selfie) before sending connection requests."
               else -> "${profile.firstName} has not completed identity verification yet. Only verified members can connect."
             },
         )

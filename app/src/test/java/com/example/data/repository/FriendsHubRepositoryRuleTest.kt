@@ -84,9 +84,9 @@ class FriendsHubRepositoryRuleTest : FirestoreEmulatorTestBase() {
     }
     assertTrue("Unverified users must not be allowed to connect", unverifiedConnect.isFailure)
 
-    // 3c. Level 1 (Phone OTP record) & Level 2 (Live Selfie submission) + Trusted Contact setup
+    // 3c. Level 1 (Gmail Verification) & Level 2 (Live Selfie submission) + Trusted Contact setup
     assertTrue(
-      withTimeout(TIMEOUT_MS) { aliceRepo.recordLevel1PhoneVerified("+919876543210") }.isSuccess
+      withTimeout(TIMEOUT_MS) { aliceRepo.recordLevel1GmailVerified("alice@gmail.com") }.isSuccess
     )
     assertTrue(
       withTimeout(TIMEOUT_MS) {
@@ -109,7 +109,7 @@ class FriendsHubRepositoryRuleTest : FirestoreEmulatorTestBase() {
       }.isSuccess
     )
     signInTestUser(bobEmail)
-    assertTrue(withTimeout(TIMEOUT_MS) { bobRepo.recordLevel1PhoneVerified("+919876500000") }.isSuccess)
+    assertTrue(withTimeout(TIMEOUT_MS) { bobRepo.recordLevel1GmailVerified("bob@gmail.com") }.isSuccess)
     assertTrue(
       withTimeout(TIMEOUT_MS) {
         bobRepo.submitLevel2LiveSelfie("data:image/jpeg;base64,/9j/4AAQSkZJRg==")
@@ -135,6 +135,8 @@ class FriendsHubRepositoryRuleTest : FirestoreEmulatorTestBase() {
     val aliceProfile = withTimeout(TIMEOUT_MS) { aliceRepo.getProfileById(aliceUid).getOrThrow()!! }
     val bobProfile = withTimeout(TIMEOUT_MS) { aliceRepo.getProfileById(bobUid).getOrThrow()!! }
     assertTrue(aliceProfile.isVerified)
+    assertTrue(aliceProfile.gmailVerified)
+    assertTrue(aliceProfile.isLevel1Verified())
     assertEquals("APPROVED", aliceProfile.selfieStatus)
 
     // 4. Verified Alice sends a connection request to verified Bob

@@ -236,9 +236,9 @@ fun ProfileScreen(
             containerColor = EmeraldContainer,
             contentColor = EmeraldOnline,
           )
-          if (profile.phoneVerified || account?.phoneVerified == true) {
+          if (profile.isLevel1Verified() || account?.isLevel1Verified() == true) {
             StatusPill(
-              text = "Level 1 OTP",
+              text = if (profile.gmailVerified || account?.gmailVerified == true) "Level 1 Gmail" else "Level 1 Verified",
               containerColor = EmeraldContainer,
               contentColor = EmeraldOnline,
             )
@@ -254,7 +254,7 @@ fun ProfileScreen(
         if (!profile.isVerified) {
           Spacer(modifier = Modifier.height(8.dp))
           Text(
-            text = "Complete Level 1 (Phone OTP) & Level 2 (Live Selfie) verification to connect with members.",
+            text = "Complete Level 1 (Gmail Verification) & Level 2 (Live Selfie) verification to connect with members.",
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
           )
@@ -877,14 +877,14 @@ fun LegalInfoScreen(
         Text(
           "1. Purpose & Consent: Between-Us collects only the minimum information required for short-term friendship discovery among verified adults 18+ in India (DPDP Act aligned).\n\n" +
             "2. Location Privacy: GPS coordinates are quantized on-device to approximate ~220m cells and stored only while your availability toggle is ON. Exact GPS coordinates and residential addresses are never shared.\n\n" +
-            "3. Identity & Trusted Contacts: Verified mobile numbers, live verification selfies, and emergency trusted contact details are strictly private and never shared with other users.\n\n" +
+            "3. Identity & Trusted Contacts: Verified Gmail addresses, live verification selfies, and emergency trusted contact details are strictly private and never shared with other users.\n\n" +
             "4. Account Deletion: You can permanently delete your profile and account data at any time from the Profile tab.",
           style = MaterialTheme.typography.bodyLarge,
         )
       } else {
         Text("Between-Us Meeting Safety Policy & Guidelines", style = MaterialTheme.typography.headlineSmall)
         Text(
-          "1. Adults 18+ & Verified Connections Only: Only verified members (Level 1 Phone OTP + Level 2 Live Selfie approved) can send or receive connection requests.\n\n" +
+          "1. Adults 18+ & Verified Connections Only: Only verified members (Level 1 Gmail Verification + Level 2 Live Selfie approved) can send or receive connection requests.\n\n" +
             "2. Public, Busy Meeting Places Only: Always choose crowded, well-lit public cafes, malls, or parks.\n\n" +
             "3. Trusted Contact & Safety Check-Ins: Share your meetup plan with a trusted contact, check in on arrival, and tap \"I'm Safe\" afterward. Missed check-ins send a reminder and then alert your trusted contact per your consent.\n\n" +
             "4. Strict Blocking & Zero Tolerance: Blocked users cannot discover, contact, or call each other.",
@@ -1221,9 +1221,9 @@ fun AdminModerationScreen(
 
               FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 StatusPill(
-                  text = if (prof.phoneVerified) "L1 Phone Verified" else "L1 Pending",
-                  containerColor = if (prof.phoneVerified) EmeraldContainer else AmberContainer,
-                  contentColor = if (prof.phoneVerified) EmeraldOnline else AmberWarm,
+                  text = if (prof.isLevel1Verified()) "L1 Gmail Verified" else "L1 Pending",
+                  containerColor = if (prof.isLevel1Verified()) EmeraldContainer else AmberContainer,
+                  contentColor = if (prof.isLevel1Verified()) EmeraldOnline else AmberWarm,
                 )
                 StatusPill(
                   text = "L2 Selfie: ${prof.selfieStatus}",

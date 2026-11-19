@@ -3,11 +3,13 @@ package com.example.ui
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTextReplacement
 import com.example.data.model.Connection
 import com.example.data.model.Meetup
@@ -347,7 +349,7 @@ class SafetyAndVerificationUiTest {
     }
 
     composeTestRule.onNodeWithText("Meetup Live Status").performScrollTo().assertIsDisplayed()
-    composeTestRule.onNodeWithText("STARTED • Meetup in progress", substring = true).performScrollTo().assertIsDisplayed()
+    composeTestRule.onNodeWithText("STARTED • Live ", substring = true).performScrollTo().assertIsDisplayed()
     composeTestRule.onNodeWithText("3.2 m apart", substring = true).performScrollTo().assertIsDisplayed()
   }
 
@@ -424,13 +426,17 @@ class SafetyAndVerificationUiTest {
     composeTestRule.onNodeWithTag("admin_unlock_button").performClick()
 
     // Both records are visible under ALL
-    composeTestRule.onNodeWithText("Meetup Monitor & Investigation Records (2)").performScrollTo().assertIsDisplayed()
-    composeTestRule.onNodeWithTag("admin_meetup_card_m_started_admin").performScrollTo().assertIsDisplayed()
-    composeTestRule.onNodeWithTag("admin_meetup_card_m_completed_admin").performScrollTo().assertIsDisplayed()
+    composeTestRule.onNodeWithText("Meetup Monitor & Investigation Records (2)").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("admin_moderation_list").performScrollToNode(hasTestTag("admin_meetup_card_m_started_admin"))
+    composeTestRule.onNodeWithTag("admin_meetup_card_m_started_admin").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("admin_moderation_list").performScrollToNode(hasTestTag("admin_meetup_card_m_completed_admin"))
+    composeTestRule.onNodeWithTag("admin_meetup_card_m_completed_admin").assertIsDisplayed()
 
     // Filter to COMPLETED only
-    composeTestRule.onNodeWithTag("admin_meetup_filter_COMPLETED").performScrollTo().performClick()
-    composeTestRule.onNodeWithTag("admin_meetup_card_m_completed_admin").performScrollTo().assertIsDisplayed()
+    composeTestRule.onNodeWithTag("admin_moderation_list").performScrollToNode(hasTestTag("admin_meetup_filter_COMPLETED"))
+    composeTestRule.onNodeWithTag("admin_meetup_filter_COMPLETED").performClick()
+    composeTestRule.onNodeWithTag("admin_moderation_list").performScrollToNode(hasTestTag("admin_meetup_card_m_completed_admin"))
+    composeTestRule.onNodeWithTag("admin_meetup_card_m_completed_admin").assertIsDisplayed()
     composeTestRule.onNodeWithTag("admin_meetup_card_m_started_admin").assertDoesNotExist()
   }
 }

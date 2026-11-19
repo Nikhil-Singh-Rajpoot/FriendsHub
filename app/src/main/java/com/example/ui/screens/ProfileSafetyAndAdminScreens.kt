@@ -1030,7 +1030,7 @@ fun AdminModerationScreen(
       val auditTimeFmt = remember { java.text.SimpleDateFormat("dd MMM, h:mm a", java.util.Locale.getDefault()) }
 
       LazyColumn(
-        modifier = Modifier.fillMaxSize().padding(innerPadding),
+        modifier = Modifier.fillMaxSize().padding(innerPadding).testTag("admin_moderation_list"),
         contentPadding = PaddingValues(18.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
       ) {
